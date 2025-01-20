@@ -1,3 +1,26 @@
+# =============================================================================
+# Stock Price Prediction Script with Linear Regression and Technical Indicators
+# =============================================================================
+# This script fetches historical stock data, processes it using Exponential Moving Average (EMA)
+# and Relative Strength Index (RSI) indicators, then applies linear regression to predict 
+# the next day's stock price. The model performance is evaluated using metrics like 
+# Mean Squared Error (MSE), Root Mean Squared Error (RMSE), and R² score. It also visualizes 
+# the predicted and actual stock prices on a plot and generates a condensed financial summary 
+# of the stock performance over the specified period.
+#
+# The script includes the following steps:
+# 1. Fetching historical stock data using Yahoo Finance API.
+# 2. Data preparation by calculating EMA and RSI, and shifting closing prices to predict the next day's price.
+# 3. Training a linear regression model with the prepared data.
+# 4. Evaluating the model's predictions and performance using MSE, RMSE, and R² score.
+# 5. Plotting the actual and predicted prices over time.
+# 6. Generating a financial summary including stock price change, model performance, and interpretation.
+#
+# The script can be customized by adjusting the stock ticker, date range, and other model parameters.
+# The results include a plot of stock prices and an output summary detailing the model's accuracy and 
+# the stock's performance over the selected period.
+# =============================================================================
+
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -16,10 +39,8 @@ def fetch_stock_data(ticker, start_date, end_date):
 
 # Step 2: Prepare Data for Linear Regression with EMA and RSI
 def prepare_data(data, window_size, rsi_window=14):
-    # Use Exponential Moving Average (EMA) instead of SMA
     data['EMA'] = data['Close'].ewm(span=window_size, adjust=False).mean()
     
-    # Calculate RSI (Relative Strength Index)
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).fillna(0)
     loss = (-delta.where(delta < 0, 0)).fillna(0)
@@ -30,19 +51,13 @@ def prepare_data(data, window_size, rsi_window=14):
     rs = avg_gain / avg_loss
     data['RSI'] = 100 - (100 / (1 + rs))
     
-    # Shift the 'Close' price to predict the next day's price
     data['Future_Close'] = data['Close'].shift(-1)
-    
-    # Drop NaN values (due to shift operation)
     data.dropna(inplace=True)
     
-    # Feature: EMA and RSI
-    # Target: Closing Price shifted by 1 day (leading indicator)
     X = data[['EMA', 'RSI']]
     y = data['Future_Close']
     
     return X, y
-
 
 # Step 3: Train-Test Split
 def split_data(X, y):
@@ -70,43 +85,33 @@ def plot_results(data, predictions, X_test):
     plt.title("Stock Price Prediction with Linear Regression")
     plt.legend()
     
-
-    script_directory = os.path.dirname(os.path.realpath(__file__))  # Get the script's folder
-    save_path = os.path.join(script_directory, "stock_price_prediction_chart.png")  # Full path for saving
-    plt.savefig(save_path)  # Save the plot
+    script_directory = os.path.dirname(os.path.realpath(__file__))
+    save_path = os.path.join(script_directory, "stock_price_prediction_chart.png")
+    plt.savefig(save_path)
     
-    print(f"Chart saved at: {save_path}")  # Confirm where the chart was saved
+    print(f"Chart saved at: {save_path}")
     
-    # Close the plot
-    plt.close()  # Close the plot immediately after saving it
-    plt.clf()  # Clear the current figure
+    plt.close()
+    plt.clf()
 
-
-# Add detailed analysis of stock price performance and model
 def add_analysis(data, predictions, y_test, stock_name, start_date, end_date):
-    """Add basic analysis metrics to the stock prediction output"""
-    
-    # Calculate basic metrics
     mse = mean_squared_error(y_test, predictions)
     rmse = np.sqrt(mse)
     r2 = r2_score(y_test, predictions)
     
-    # Fix FutureWarning and ensure start_price and end_price are scalars
-    start_price = data['Close'].iloc[0].item()  # .item() ensures it's a scalar value
-    end_price = data['Close'].iloc[-1].item()  # .item() ensures it's a scalar value
+    start_price = data['Close'].iloc[0].item()
+    end_price = data['Close'].iloc[-1].item()
     price_change = end_price - start_price
     price_change_pct = (price_change / start_price) * 100
     
-    # Calculate max and min prices explicitly as scalars
-    max_price = data['Close'].max().item()  # .item() ensures it's a scalar value
-    min_price = data['Close'].min().item()  # .item() ensures it's a scalar value
+    max_price = data['Close'].max().item()
+    min_price = data['Close'].min().item()
     
-    # Print analysis
     print("\n=== Stock Price Analysis ===")
     print(f"Time Period: {start_date} to {end_date}")
     print("\nPrice Summary:")
-    print(f"Starting Price: ${start_price:.2f}")  # Corrected format
-    print(f"Ending Price: ${end_price:.2f}")  # Corrected format
+    print(f"Starting Price: ${start_price:.2f}")
+    print(f"Ending Price: ${end_price:.2f}")
     print(f"Total Change: ${price_change:.2f} ({price_change_pct:.1f}%)")
     print(f"Highest Price: ${max_price:.2f}")
     print(f"Lowest Price: ${min_price:.2f}")
@@ -126,13 +131,9 @@ def add_analysis(data, predictions, y_test, stock_name, start_date, end_date):
     else:
         print("• Model accuracy is good")
     
-    # Call the summary function and pass the additional parameters
     generate_financial_summary(start_price, end_price, price_change, price_change_pct, max_price, min_price, mse, rmse, r2, stock_name, start_date, end_date)
 
 def generate_financial_summary(start_price, end_price, price_change, price_change_pct, max_price, min_price, mse, rmse, r2, stock_name, start_date, end_date):
-    """Generate the condensed financial summary as a paragraph"""
-    
-    # Calculate the number of days in the period
     start_date_obj = pd.to_datetime(start_date)
     end_date_obj = pd.to_datetime(end_date)
     num_days = (end_date_obj - start_date_obj).days
@@ -144,29 +145,49 @@ def generate_financial_summary(start_price, end_price, price_change, price_chang
         "This model is best for short-term predictions based on recent trends, but may be less reliable during sudden price swings."
     )
     
-    # Print the condensed financial summary
     print("\n=== Condensed Financial Summary ===")
     print(summary)
     
     return summary
+
+def predict_future_prices_with_trend(model, data, X_latest, days=60, trend_type="linear"):
+    """Predict the next 'days' future stock prices with trend adjustment and volatility."""
+    future_predictions = []
+    X_current = X_latest.copy()
+
+    # Start by predicting the next day's price
+    next_prediction = model.predict([X_current.iloc[-1]])[0]
+    future_predictions.append(next_prediction)
+
+    # Calculate the trend from the original 'data' which includes the 'Close' prices
+    price_changes = data['Close'].diff().dropna()  # Calculate daily price changes
+    average_change = price_changes.mean()  # Use average change as a trend reference
+    volatility = price_changes.std()  # Calculate standard deviation for volatility
+
+    # Predict future prices considering the trend and volatility
+    for _ in range(days - 1):
+        # Add randomness based on volatility (simulating price fluctuations)
+        random_noise = np.random.normal(0, volatility)  # Simulate random price fluctuations
+        next_prediction = future_predictions[-1] + average_change + random_noise
+        future_predictions.append(next_prediction)
+
+    return future_predictions
+
+
 # Main Function
 if __name__ == "__main__":
-    # Parameters
     TICKER = "AAPL"  # Replace with your desired stock symbol
     START_DATE = "2020-01-01"
-    END_DATE = "2023-01-01"
+    END_DATE = (pd.to_datetime("today") - pd.tseries.offsets.BDay(1)).strftime('%Y-%m-%d')  # Current date minus 1 business day
     WINDOW_SIZE = 20  # EMA window size
     
-    # Fetch and prepare data
     data = fetch_stock_data(TICKER, START_DATE, END_DATE)
     X, y = prepare_data(data, WINDOW_SIZE)
     X_train, X_test, y_train, y_test = split_data(X, y)
     
-    # Train and evaluate the model
     model = train_model(X_train, y_train)
     predictions, mse = predict_and_evaluate(model, X_test, y_test)
     
-    # Print quick analysis
     print(f"\nQuick Analysis:")
     print(f"Mean Squared Error: {mse:.2f}")
     print(f"Average prediction error: ±${np.sqrt(mse):.2f}")
@@ -174,8 +195,12 @@ if __name__ == "__main__":
     print(f"Best for: Shorter-term predictions with recent trends")
     print(f"Less reliable for: Sudden, large price swings")
     
-    # Add detailed analysis
     add_analysis(data, predictions, y_test, TICKER, START_DATE, END_DATE)
     
-    # Plot results
     plot_results(data, predictions, X_test)
+    
+    # Predict future prices for the next 60 days
+    future_prices_with_trend = predict_future_prices_with_trend(model, data, X_test, days=60)
+
+    for i, price in enumerate(future_prices_with_trend, 1):
+        print(f"Day {i}: ${float(price):.2f}")
