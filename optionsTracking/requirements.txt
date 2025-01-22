@@ -1,0 +1,4 @@
+requests
+numpy
+yfinance  # For Yahoo Finance data fetch (or another relevant library)
+pandas
