@@ -1,7 +1,7 @@
-Sentiment Analysis for AMZN:
+Sentiment Analysis for AAL:
 Positive: 0
 Neutral: 0
 Negative: 0
 
 AI-Generated Summary of Relevant Headlines:
-No relevant headlines found for AMZN.
+No relevant headlines found for AAL.

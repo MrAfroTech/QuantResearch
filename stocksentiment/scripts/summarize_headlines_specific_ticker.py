@@ -105,7 +105,7 @@ def summarize_headlines(symbol):
 if __name__ == "__main__":
     # Prompt the user for input
     ticker_symbols = ['AAPL', 'GOOGL', 'AMZN', 'MSFT', 'TSLA', 'META', 'NFLX', 
-                      'NVDA', 'SPY', 'AMD', 'BA', 'DIS', 'GS', 'BRK.A', 'V']
+                      'NVDA', 'SPY', 'AMD', 'BA', 'DIS', 'GS', 'BRK.A', 'V', 'AAL']
     print("Please choose a stock symbol to summarize from the list below:")
     for idx, symbol in enumerate(ticker_symbols, start=1):
         print(f"{idx}. {symbol}")

@@ -1,0 +1,4 @@
+Sentiment Analysis for AAL:
+Positive: 17
+Neutral: 34
+Negative: 2

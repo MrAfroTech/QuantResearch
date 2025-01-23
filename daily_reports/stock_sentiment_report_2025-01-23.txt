@@ -1,0 +1,113 @@
+Daily Stock News Sentiment Report - 2025-01-23
+==================================================
+
+Stock: JBLU
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: AAL
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: SORL
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: PTON
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: AAPL
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: GOOGL
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: MSFT
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: AMZN
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: NVDA
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+
+Stock: META
+Total Articles: 0
+Sentiment Breakdown:
+  Positive: 0
+  Neutral: 0
+  Negative: 0
+
+Headline Sentiments:
+
+==================================================
+

@@ -1,0 +1,30 @@
+AI Stock Sentiment Report - 2025-01-23
+==================================================
+
+Stock: JBLU
+Total Headlines: 50
+Market Sentiment: STRONGLY BEARISH
+
+AI Summary:
+Texas Instruments: EPS Beats CSX Stock Dips After Mixed Q4 Results: Details. Boeing expects $4 billion loss for fourth quarter after chaotic 2024. Intuitive Surgical Q4 Earnings: Revenue Beat, EPS Beat, Da Vinci Procedures Jump 18% And More.
+
+==================================================
+
+AAL: Insufficient data for analysis
+
+SORL: Insufficient data for analysis
+
+PTON: Insufficient data for analysis
+
+AAPL: Insufficient data for analysis
+
+GOOGL: Insufficient data for analysis
+
+MSFT: Insufficient data for analysis
+
+AMZN: Insufficient data for analysis
+
+NVDA: Insufficient data for analysis
+
+META: Insufficient data for analysis
+
