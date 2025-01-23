@@ -1,0 +1,4 @@
+Sentiment Analysis for GS:
+Positive: 10
+Neutral: 13
+Negative: 5

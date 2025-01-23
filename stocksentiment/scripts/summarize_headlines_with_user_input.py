@@ -1,121 +1,50 @@
-from textblob import TextBlob
-from textblob import download_corpora
-download_corpora.download_all()
-
-import ssl
-import os
-import certifi
-ssl._create_default_https_context = ssl._create_unverified_context
-
-
 import json
+import os
 
-# List of ticker symbols to choose from
-TICKER_SYMBOLS = [
-    'AAPL', 'GOOGL', 'AMZN', 'MSFT', 'TSLA',
-    'META', 'NFLX', 'NVDA', 'SPY', 'AMD',
-    'BA', 'DIS', 'GS', 'BRK.A', 'V'
-]
+def summarize_headlines(symbol):
+    """
+    Summarize the headlines from the sentiment-processed news file for the given stock symbol.
 
-def analyze_sentiment(news_article):
-    # Perform sentiment analysis on the news article's headline
-    analysis = TextBlob(news_article['headline'])
-    polarity = analysis.sentiment.polarity
+    Args:
+        symbol (str): Stock ticker symbol.
+    """
+    # Define the path to the sentiment-processed news file
+    sentiment_file = f'./data/{symbol}_news_with_sentiment.json'
 
-    # Classify sentiment based on polarity
-    if polarity > 0:
-        return 'positive'
-    elif polarity == 0:
-        return 'neutral'
-    else:
-        return 'negative'
-
-def process_news_data(symbol):
-    # Load the news data from the previously fetched file
-    with open(f'./data/{symbol}_news.json', 'r') as f:
-        news_data = json.load(f)
-
-    # Initialize counters
-    sentiment_count = {'positive': 0, 'neutral': 0, 'negative': 0}
-    summaries = []
-
-    # Analyze sentiment for each article and update the data
-    for article in news_data:
-        if symbol in article['headline']:  # Focus on articles with the ticker symbol in the headline
-            sentiment = analyze_sentiment(article)
-            article['sentiment'] = sentiment
-            sentiment_count[sentiment] += 1
-            summaries.append(article['headline'])
-
-    # Create a summary of all headlines
-    summary_text = "\n".join(summaries)
-
-    # Save the updated news data with sentiment analysis and summary
-    with open(f'./data/{symbol}_news_with_sentiment.json', 'w') as f:
-        json.dump(news_data, f, indent=4)
-
-    # Save the sentiment count and summary to a separate text file
-    with open(f'./data/{symbol}_sentiment_summary.txt', 'w') as f:
-        f.write(f"Sentiment Analysis for {symbol}:\n")
-        f.write(f"Positive: {sentiment_count['positive']}\n")
-        f.write(f"Neutral: {sentiment_count['neutral']}\n")
-        f.write(f"Negative: {sentiment_count['negative']}\n\n")
-        f.write("Summary of all news headlines:\n")
-        f.write(summary_text)
-
-    print(f"Sentiment analysis and summary for {symbol} completed successfully.")
-
-def get_user_input():
-    # Display the ticker symbols for the user to choose from
-    print("Please choose a stock symbol to analyze from the list below:")
-    for index, symbol in enumerate(TICKER_SYMBOLS, 1):
-        print(f"{index}. {symbol}")
-
-    # Get user input for the symbol
-    while True:
-        try:
-            user_choice = int(input("\nEnter the number corresponding to your choice: "))
-            if 1 <= user_choice <= len(TICKER_SYMBOLS):
-                symbol = TICKER_SYMBOLS[user_choice - 1]
-                return symbol
-            else:
-                print("Invalid choice. Please select a number between 1 and 15.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
-
-def process_news_data(symbol):
-    # Define the path to the news file
-    news_file = f'./data/{symbol}_news.json'
-
-    # Check if the news file exists
-    if not os.path.exists(news_file):
-        print(f"Error: News file for {symbol} not found.")
+    # Check if the file exists
+    if not os.path.exists(sentiment_file):
+        print(f"Error: Sentiment file for {symbol} not found. Please run the analyze_sentiment script first.")
         return
 
-    # Load the news data from the file
-    with open(news_file, 'r') as f:
+    # Load the sentiment-processed news data
+    with open(sentiment_file, 'r') as f:
         news_data = json.load(f)
 
-    # Initialize counters
+    # Initialize counters for sentiment
     sentiment_count = {'positive': 0, 'neutral': 0, 'negative': 0}
     summaries = []
 
-    # Analyze sentiment for each article and update the data
+    # Process each article
     for article in news_data:
-        sentiment = analyze_sentiment(article)
-        article['sentiment'] = sentiment
+        sentiment = article.get('sentiment', 'unknown')
+        headline = article.get('headline', 'No headline available')
         sentiment_count[sentiment] += 1
-        summaries.append(article['headline'])
+        summaries.append(headline)
 
     # Create a summary of all headlines
     summary_text = "\n".join(summaries)
 
-    # Save the updated news data with sentiment analysis and summary
-    with open(f'./data/{symbol}_news_with_sentiment.json', 'w') as f:
-        json.dump(news_data, f, indent=4)
+    # Print the sentiment analysis results
+    print(f"\nSentiment Analysis for {symbol}:")
+    print(f"Positive: {sentiment_count['positive']}")
+    print(f"Neutral: {sentiment_count['neutral']}")
+    print(f"Negative: {sentiment_count['negative']}")
+    print("\nSummary of all headlines:")
+    print(summary_text)
 
-    # Save the sentiment count and summary to a separate text file
-    with open(f'./data/{symbol}_sentiment_summary.txt', 'w') as f:
+    # Save the summary to a text file
+    summary_file = f'./data/{symbol}_headline_summary.txt'
+    with open(summary_file, 'w') as f:
         f.write(f"Sentiment Analysis for {symbol}:\n")
         f.write(f"Positive: {sentiment_count['positive']}\n")
         f.write(f"Neutral: {sentiment_count['neutral']}\n")
@@ -123,10 +52,23 @@ def process_news_data(symbol):
         f.write("Summary of all news headlines:\n")
         f.write(summary_text)
 
-    print(f"Sentiment analysis and summary for {symbol} completed successfully.")
-
+    print(f"\nHeadline summary saved to {summary_file}.")
 
 if __name__ == "__main__":
-    # Get user input for the ticker symbol
-    selected_symbol = get_user_input()
-    process_news_data(selected_symbol)
+    # List of available stock symbols
+    stock_symbols = [
+        "AAPL", "GOOGL", "AMZN", "MSFT", "TSLA", 
+        "META", "NFLX", "NVDA", "SPY", "AMD", 
+        "BA", "DIS", "GS", "BRK.A", "V"
+    ]
+
+    print("Please choose a stock symbol to summarize from the list below:")
+    for i, symbol in enumerate(stock_symbols, start=1):
+        print(f"{i}. {symbol}")
+
+    choice = int(input("\nEnter the number corresponding to your choice: "))
+    if 1 <= choice <= len(stock_symbols):
+        selected_symbol = stock_symbols[choice - 1]
+        summarize_headlines(selected_symbol)
+    else:
+        print("Invalid choice. Please run the script again and select a valid number.")

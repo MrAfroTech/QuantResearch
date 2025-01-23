@@ -1,0 +1,4 @@
+Sentiment Analysis for Amazon (AMZN):
+Positive: 22
+Neutral: 48
+Negative: 8

@@ -1,0 +1,7 @@
+Sentiment Analysis for AMZN:
+Positive: 6
+Neutral: 6
+Negative: 0
+
+AI-Generated Summary of Relevant Headlines:
+Amazon.com, Inc. (AMZN) is a strong growth stock, according to Cantor Fitzgerald. Cantor Fitzgerald raised its price target on Amazon.com to $270, highlighting the company's strong AI growth and future potential.
