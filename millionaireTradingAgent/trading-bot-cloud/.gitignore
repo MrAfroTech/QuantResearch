@@ -1,0 +1,9 @@
+node_modules/
+data/
+.env
+frontend/dist/
+*.db
+*.db-wal
+*.db-shm
+.vercel
+.cursor/mcp.json

@@ -1,0 +1,31 @@
+{
+  "name": "ai-options-trading-bot",
+  "version": "1.0.0",
+  "description": "AI-powered options trading bot with Schwab/E*Trade integration",
+  "type": "module",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node --watch backend/server.js",
+    "build": "npm run build:frontend",
+    "build:frontend": "vite build",
+    "dev:frontend": "vite --port 5173",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@libsql/client": "^0.14.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3",
+    "postgres": "^3.4.9",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "twilio": "^5.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "vite": "^6.0.7"
+  }
+}
