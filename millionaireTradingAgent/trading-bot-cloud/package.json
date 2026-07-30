@@ -1,15 +1,17 @@
 {
-  "name": "ai-options-trading-bot",
+  "name": "the305",
   "version": "1.0.0",
-  "description": "AI-powered options trading bot with Schwab/E*Trade integration",
+  "description": "The305 — options trading bot with Tradier signals and Tastytrade execution",
   "type": "module",
   "scripts": {
     "start": "node backend/server.js",
     "dev": "node --watch backend/server.js",
     "build": "npm run build:frontend",
     "build:frontend": "vite build",
+    "build:vercel": "vite build",
     "dev:frontend": "vite --port 5173",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\""
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
+    "register:telegram-webhook": "node scripts/register-telegram-webhook.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -20,8 +22,7 @@
     "node-cron": "^3.0.3",
     "postgres": "^3.4.9",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "twilio": "^5.4.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

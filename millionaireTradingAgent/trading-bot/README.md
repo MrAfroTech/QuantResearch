@@ -1,4 +1,4 @@
-# AI Options Trading Bot
+# The305
 
 An AI-powered options trading bot that monitors **VIX**, **SOFI**, and **C3.AI**. It evaluates entry signals via TradingView MCP, manages risk, and executes trades via **Tastytrade**. Includes a React dashboard and Twilio SMS alerts with STOP/GO mode control.
 

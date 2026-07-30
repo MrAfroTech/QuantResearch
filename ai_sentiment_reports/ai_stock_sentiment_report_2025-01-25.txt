@@ -1,0 +1,93 @@
+AI Stock Sentiment Report - 2025-01-25
+==================================================
+
+Stock: JBLU
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for JBLU.
+
+==================================================
+
+Stock: AAL
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for AAL.
+
+==================================================
+
+Stock: SORL
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for SORL.
+
+==================================================
+
+Stock: PTON
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for PTON.
+
+==================================================
+
+Stock: AAPL
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for AAPL.
+
+==================================================
+
+Stock: GOOGL
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for GOOGL.
+
+==================================================
+
+Stock: MSFT
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for MSFT.
+
+==================================================
+
+Stock: AMZN
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for AMZN.
+
+==================================================
+
+Stock: NVDA
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for NVDA.
+
+==================================================
+
+Stock: META
+Total Headlines: 0
+Market Sentiment: Inconclusive
+
+AI Summary:
+No recent news available for META.
+
+==================================================
+

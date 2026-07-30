@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Text Thread Transcriber</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f4f5;
+      color: #18181b;
+    }
+    .wrap {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.6rem; }
+    .sub { margin: 0 0 24px; color: #52525b; }
+    .panel {
+      background: #fff;
+      border: 1px solid #e4e4e7;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    input[type="file"] { flex: 1; min-width: 220px; }
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
+    button:disabled { background: #93c5fd; cursor: not-allowed; }
+    button.secondary { background: #3f3f46; }
+    .status { margin-top: 12px; color: #52525b; min-height: 1.2em; }
+    .legend { display: flex; gap: 16px; margin-top: 12px; font-size: 0.9rem; }
+    .swatch {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    .petitioner { background: #007aff; }
+    .respondent { background: #636366; }
+    #preview {
+      display: grid;
+      gap: 12px;
+      max-height: 420px;
+      overflow: auto;
+    }
+    .msg {
+      border-radius: 10px;
+      padding: 12px 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+    .msg.petitioner {
+      background: #dbeafe;
+      border: 1px solid #93c5fd;
+      margin-left: 12%;
+    }
+    .msg.respondent {
+      background: #e4e4e7;
+      border: 1px solid #a1a1aa;
+      margin-right: 12%;
+    }
+    .role {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      opacity: 0.8;
+    }
+    #sourcePreview {
+      max-width: 100%;
+      border-radius: 8px;
+      border: 1px solid #e4e4e7;
+      margin-top: 12px;
+      display: none;
+    }
+    .error { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Text Thread Transcriber</h1>
+    <p class="sub">Upload an MP4 screen recording or screenshot of a text thread. Blue bubbles are labeled Petitioner; dark gray bubbles are labeled Respondent. Export the transcript as a PDF.</p>
+
+    <div class="panel">
+      <div class="row">
+        <input id="fileInput" type="file" accept="video/mp4,image/png,image/jpeg,image/webp,.mp4" />
+        <button id="processBtn" disabled>Transcribe Thread</button>
+        <button id="downloadBtn" class="secondary" disabled>Download PDF</button>
+      </div>
+      <div class="legend">
+        <span><span class="swatch petitioner"></span>Petitioner (blue)</span>
+        <span><span class="swatch respondent"></span>Respondent (dark gray)</span>
+      </div>
+      <div id="status" class="status"></div>
+      <video id="sourcePreviewVideo" controls muted playsinline style="display:none;"></video>
+      <img id="sourcePreview" alt="Uploaded thread screenshot" />
+    </div>
+
+    <div class="panel">
+      <h2 style="margin:0 0 12px;font-size:1.05rem;">Transcript Preview</h2>
+      <div id="preview"></div>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const processBtn = document.getElementById("processBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const statusEl = document.getElementById("status");
+    const previewEl = document.getElementById("preview");
+    const sourcePreview = document.getElementById("sourcePreview");
+    const sourcePreviewVideo = document.getElementById("sourcePreviewVideo");
+
+    let currentMessages = [];
+    let currentFileName = "text-thread-transcript";
+    let previewObjectUrl = null;
+
+    function isVideoFile(file) {
+      return file.type.startsWith("video/") || /\.mp4$/i.test(file.name);
+    }
+
+    function clearPreview() {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+        previewObjectUrl = null;
+      }
+      sourcePreview.style.display = "none";
+      sourcePreview.src = "";
+      sourcePreviewVideo.style.display = "none";
+      sourcePreviewVideo.removeAttribute("src");
+      sourcePreviewVideo.load();
+    }
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      processBtn.disabled = !file;
+      downloadBtn.disabled = true;
+      currentMessages = [];
+      previewEl.innerHTML = "";
+      clearPreview();
+
+      if (!file) {
+        statusEl.textContent = "";
+        return;
+      }
+
+      currentFileName = file.name.replace(/\.[^.]+$/, "") || "text-thread-transcript";
+      previewObjectUrl = URL.createObjectURL(file);
+
+      if (isVideoFile(file)) {
+        sourcePreviewVideo.src = previewObjectUrl;
+        sourcePreviewVideo.style.display = "block";
+        sourcePreviewVideo.load();
+        statusEl.textContent = "MP4 loaded. Ready to transcribe.";
+      } else {
+        sourcePreview.src = previewObjectUrl;
+        sourcePreview.style.display = "block";
+        statusEl.textContent = "Image loaded. Ready to transcribe.";
+      }
+    });
+
+    processBtn.addEventListener("click", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      processBtn.disabled = true;
+      downloadBtn.disabled = true;
+      previewEl.innerHTML = "";
+      currentMessages = [];
+      statusEl.classList.remove("error");
+
+      try {
+        const messages = isVideoFile(file)
+          ? await processVideo(file)
+          : await processImage(file);
+
+        if (messages.length === 0) {
+          throw new Error("No readable messages were found. Try a clearer MP4 or screenshot.");
+        }
+
+        currentMessages = messages;
+        renderPreview(messages);
+        downloadBtn.disabled = false;
+        statusEl.textContent = `Done. Transcribed ${messages.length} messages.`;
+      } catch (err) {
+        statusEl.textContent = err.message || "Transcription failed.";
+        statusEl.classList.add("error");
+      } finally {
+        processBtn.disabled = !fileInput.files[0];
+      }
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      if (!currentMessages.length) return;
+      downloadPdf(currentMessages, currentFileName);
+    });
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function processImage(file) {
+      statusEl.textContent = "Loading image…";
+      const image = await loadImage(file);
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+
+      if (!width || !height) {
+        throw new Error("Image loaded with invalid dimensions.");
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0);
+      return transcribeCanvas(canvas, (label) => {
+        statusEl.textContent = label;
+      });
+    }
+
+    async function processVideo(file) {
+      statusEl.textContent = "Loading MP4…";
+      const video = sourcePreviewVideo;
+      await waitForVideoReady(video);
+
+      const duration = video.duration;
+      if (!Number.isFinite(duration) || duration <= 0) {
+        throw new Error("Could not read MP4 duration.");
+      }
+
+      statusEl.textContent = "Preparing first video frame…";
+      await captureFrame(video, 0);
+
+      const interval = duration > 120 ? 1.5 : 1.0;
+      const timestamps = [];
+      for (let t = 0; t < duration; t += interval) {
+        timestamps.push(t);
+      }
+      if (timestamps[timestamps.length - 1] < duration - 0.25) {
+        timestamps.push(Math.max(0, duration - 0.1));
+      }
+
+      const merged = [];
+      const seen = new Set();
+
+      for (let i = 0; i < timestamps.length; i += 1) {
+        const time = timestamps[i];
+        statusEl.textContent = `Processing MP4 frame ${i + 1} of ${timestamps.length} (${formatTime(time)} / ${formatTime(duration)})…`;
+        const canvas = await captureFrame(video, time);
+        const frameMessages = await transcribeCanvas(canvas);
+
+        for (const msg of frameMessages) {
+          const key = `${msg.role}::${normalizeText(msg.text)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push(msg);
+        }
+      }
+
+      return merged;
+    }
+
+    async function transcribeCanvas(canvas, onProgress) {
+      if (!canvas.width || !canvas.height) {
+        return [];
+      }
+
+      if (onProgress) onProgress("Detecting message bubbles…");
+      const bubbles = detectBubbles(canvas);
+
+      if (bubbles.length === 0) {
+        return [];
+      }
+
+      const messages = [];
+      for (let i = 0; i < bubbles.length; i += 1) {
+        const bubble = bubbles[i];
+        if (onProgress) {
+          onProgress(`Transcribing message ${i + 1} of ${bubbles.length}…`);
+        }
+        const crop = cropBubble(canvas, bubble);
+        const text = await recognizeText(crop);
+        if (text.trim()) {
+          messages.push({
+            role: bubble.role,
+            text: cleanupText(text),
+          });
+        }
+      }
+      return messages;
+    }
+
+    function normalizeText(text) {
+      return text.toLowerCase().replace(/\s+/g, " ").trim();
+    }
+
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${String(secs).padStart(2, "0")}`;
+    }
+
+    function waitForVideoReady(video) {
+      return new Promise((resolve, reject) => {
+        const isReady = () =>
+          video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+          video.videoWidth > 0 &&
+          video.videoHeight > 0;
+
+        if (isReady()) {
+          resolve(video);
+          return;
+        }
+
+        const onReady = () => {
+          if (isReady()) {
+            cleanup();
+            resolve(video);
+          }
+        };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error("Could not load MP4."));
+        };
+
+        const cleanup = () => {
+          video.removeEventListener("loadeddata", onReady);
+          video.removeEventListener("loadedmetadata", onReady);
+          video.removeEventListener("canplay", onReady);
+          video.removeEventListener("error", onError);
+        };
+
+        video.addEventListener("loadeddata", onReady);
+        video.addEventListener("loadedmetadata", onReady);
+        video.addEventListener("canplay", onReady);
+        video.addEventListener("error", onError);
+        video.load();
+      });
+    }
+
+    function waitForPaintedFrame(video) {
+      return new Promise((resolve) => {
+        if (typeof video.requestVideoFrameCallback === "function") {
+          video.requestVideoFrameCallback(() => resolve());
+          return;
+        }
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+    }
+
+    function seekVideo(video, time) {
+      return new Promise((resolve, reject) => {
+        const target = Math.min(Math.max(0, time), Math.max(0, video.duration - 0.05));
+
+        if (Math.abs(video.currentTime - target) < 0.05 && video.readyState >= 2) {
+          resolve();
+          return;
+        }
+
+        const onSeeked = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error("Could not seek within MP4."));
+        };
+
+        const cleanup = () => {
+          video.removeEventListener("seeked", onSeeked);
+          video.removeEventListener("error", onError);
+        };
+
+        video.addEventListener("seeked", onSeeked);
+        video.addEventListener("error", onError);
+        video.currentTime = target;
+      });
+    }
+
+    async function captureFrame(video, time) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await seekVideo(video, time);
+        await waitForPaintedFrame(video);
+
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        if (width > 0 && height > 0) {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(video, 0, 0, width, height);
+          return canvas;
+        }
+
+        await sleep(150 * (attempt + 1));
+      }
+
+      throw new Error("Could not capture a readable video frame. Try reopening the MP4 or re-export it.");
+    }
+
+    function loadImage(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("Could not load image."));
+        };
+        img.src = url;
+      });
+    }
+
+    function classifyPixel(r, g, b, darkMode) {
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const brightness = (r + g + b) / 3;
+      const saturation = max === 0 ? 0 : (max - min) / max;
+
+      const isBlue =
+        b > 95 &&
+        b > r + 25 &&
+        b > g + 10 &&
+        saturation > 0.2;
+
+      const graySpread = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+      const isGray =
+        graySpread < 35 &&
+        saturation < 0.25 &&
+        (darkMode
+          ? brightness >= 45 && brightness <= 150
+          : brightness >= 95 && brightness <= 210);
+
+      if (isBlue) return "petitioner";
+      if (isGray) return "respondent";
+      return "background";
+    }
+
+    function detectBubbles(canvas) {
+      const { width, height } = canvas;
+      if (!width || !height) {
+        return [];
+      }
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const imageData = ctx.getImageData(0, 0, width, height).data;
+
+      let darkPixels = 0;
+      for (let i = 0; i < imageData.length; i += 16) {
+        const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+        if (brightness < 85) darkPixels += 1;
+      }
+      const darkMode = darkPixels / (imageData.length / 16) > 0.35;
+
+      const step = Math.max(2, Math.floor(Math.min(width, height) / 900));
+      const mask = new Uint8Array(width * height);
+
+      for (let y = 0; y < height; y += step) {
+        for (let x = 0; x < width; x += step) {
+          const idx = (y * width + x) * 4;
+          const role = classifyPixel(imageData[idx], imageData[idx + 1], imageData[idx + 2], darkMode);
+          if (role !== "background") {
+            mask[y * width + x] = role === "petitioner" ? 1 : 2;
+          }
+        }
+      }
+
+      const visited = new Uint8Array(width * height);
+      const boxes = [];
+
+      for (let y = 0; y < height; y += step) {
+        for (let x = 0; x < width; x += step) {
+          const start = mask[y * width + x];
+          if (!start || visited[y * width + x]) continue;
+
+          let minX = x;
+          let maxX = x;
+          let minY = y;
+          let maxY = y;
+          let count = 0;
+          const stack = [[x, y]];
+
+          while (stack.length) {
+            const [cx, cy] = stack.pop();
+            const pos = cy * width + cx;
+            if (cx < 0 || cy < 0 || cx >= width || cy >= height) continue;
+            if (visited[pos] || mask[pos] !== start) continue;
+
+            visited[pos] = 1;
+            count += 1;
+            minX = Math.min(minX, cx);
+            maxX = Math.max(maxX, cx);
+            minY = Math.min(minY, cy);
+            maxY = Math.max(maxY, cy);
+
+            stack.push([cx + step, cy], [cx - step, cy], [cx, cy + step], [cx, cy - step]);
+          }
+
+          const boxWidth = (maxX - minX) + step;
+          const boxHeight = (maxY - minY) + step;
+          if (count < 20) continue;
+          if (boxWidth < 40 || boxHeight < 18) continue;
+          if (boxWidth > width * 0.92) continue;
+
+          boxes.push({
+            role: start === 1 ? "petitioner" : "respondent",
+            x: Math.max(0, minX - step * 2),
+            y: Math.max(0, minY - step * 2),
+            w: Math.min(width - minX, boxWidth + step * 4),
+            h: Math.min(height - minY, boxHeight + step * 4),
+          });
+        }
+      }
+
+      boxes.sort((a, b) => a.y - b.y || a.x - b.x);
+
+      const merged = [];
+      for (const box of boxes) {
+        const last = merged[merged.length - 1];
+        if (
+          last &&
+          last.role === box.role &&
+          verticalOverlap(last, box) > 0.45 &&
+          Math.abs(last.x - box.x) < 50
+        ) {
+          last.x = Math.min(last.x, box.x);
+          last.y = Math.min(last.y, box.y);
+          last.w = Math.max(last.x + last.w, box.x + box.w) - last.x;
+          last.h = Math.max(last.y + last.h, box.y + box.h) - last.y;
+        } else {
+          merged.push({ ...box });
+        }
+      }
+
+      return merged;
+    }
+
+    function verticalOverlap(a, b) {
+      const top = Math.max(a.y, b.y);
+      const bottom = Math.min(a.y + a.h, b.y + b.h);
+      const overlap = Math.max(0, bottom - top);
+      const smaller = Math.min(a.h, b.h);
+      return smaller === 0 ? 0 : overlap / smaller;
+    }
+
+    function cropBubble(sourceCanvas, bubble) {
+      if (!bubble.w || !bubble.h) {
+        throw new Error("Invalid bubble dimensions.");
+      }
+
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = bubble.w;
+      cropCanvas.height = bubble.h;
+      const cropCtx = cropCanvas.getContext("2d");
+      cropCtx.drawImage(
+        sourceCanvas,
+        bubble.x,
+        bubble.y,
+        bubble.w,
+        bubble.h,
+        0,
+        0,
+        bubble.w,
+        bubble.h
+      );
+
+      const imageData = cropCtx.getImageData(0, 0, bubble.w, bubble.h);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const boosted = brightness < 120 ? 255 : 0;
+        data[i] = boosted;
+        data[i + 1] = boosted;
+        data[i + 2] = boosted;
+      }
+      cropCtx.putImageData(imageData, 0, 0);
+      return cropCanvas;
+    }
+
+    async function recognizeText(canvas) {
+      const { data } = await Tesseract.recognize(canvas, "eng", {
+        logger: () => {},
+      });
+      return data.text || "";
+    }
+
+    function cleanupText(text) {
+      return text
+        .replace(/\s+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+    }
+
+    function renderPreview(messages) {
+      previewEl.innerHTML = messages
+        .map(
+          (msg) => `
+            <div class="msg ${msg.role}">
+              <div class="role">${msg.role}</div>
+              <div>${escapeHtml(msg.text)}</div>
+            </div>
+          `
+        )
+        .join("");
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function downloadPdf(messages, baseName) {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "pt", format: "letter" });
+      const margin = 48;
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const maxWidth = pageWidth - margin * 2;
+      let y = margin;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("Text Thread Transcript", margin, y);
+      y += 24;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90);
+      doc.text(`Generated ${new Date().toLocaleString()}`, margin, y);
+      y += 24;
+      doc.setTextColor(0);
+
+      for (const msg of messages) {
+        const roleLabel = msg.role === "petitioner" ? "PETITIONER" : "RESPONDENT";
+        const bodyLines = doc.splitTextToSize(msg.text, maxWidth);
+        const blockHeight = bodyLines.length * 14 + 30;
+
+        if (y + blockHeight > pageHeight - margin) {
+          doc.addPage();
+          y = margin;
+        }
+
+        if (msg.role === "petitioner") {
+          doc.setTextColor(0, 102, 204);
+        } else {
+          doc.setTextColor(70, 70, 75);
+        }
+
+        doc.setFont("helvetica", "bold");
+        doc.text(roleLabel + ":", margin, y);
+        y += 16;
+
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(20, 20, 20);
+        doc.text(bodyLines, margin, y);
+        y += bodyLines.length * 14 + 18;
+      }
+
+      doc.save(`${baseName}.pdf`);
+    }
+  </script>
+</body>
+</html>

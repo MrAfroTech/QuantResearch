@@ -1,0 +1,23 @@
+/** Canonical default symbols when WATCHLIST / TV_WATCHLIST env is unset. */
+export const DEFAULT_WATCHLIST = [
+  'SHOP',
+  'NFLX',
+  'TOST',
+  'DUOL',
+  'PTON',
+  'PLTM',
+  'RIOT',
+  'SOUN',
+  'RIVN',
+  'LYFT',
+  'UBER',
+  'HOOD',
+  'PLTR',
+  'SOFI',
+  'AI',
+  'JBLU',
+  'SPY',
+  'SPX',
+  'QQQ',
+  'IWM',
+];

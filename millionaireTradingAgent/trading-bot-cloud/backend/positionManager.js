@@ -2,8 +2,10 @@ import {
   getBotState,
   getOpenPositions,
   getOpenPositionCount,
-  addMonthlySpend,
   closePosition,
+  updatePositionExcursion,
+  updatePositionPyramidState,
+  partialClosePosition,
 } from './db.js';
 import {
   fetchQuote,
@@ -11,15 +13,26 @@ import {
   getOptionPremium,
   closeOptionOrder,
 } from './brokerageConnector.js';
+import {
+  getSwingBudgetRemaining,
+  getSwingTotalAllocated,
+  SWING_WEEKLY_TOP_OFF,
+} from './budget/budgetAllocations.js';
+import { ladderPositionSize } from './ladder/ladderSizing.js';
+import { ladderExitPhase, LADDER_MILESTONES_PCT } from './ladder/ladderConfig.js';
+import { handleLadderPositionMonitor } from './ladder/ladderExit.js';
+import { getStrategyEnvironment } from './strategyEnvironment.js';
+import { sendCloseFailedTelegram } from './telegramHandler.js';
 
 const MAX_POSITIONS = 3;
-const MAX_MONTHLY_BUDGET = 599;
-const PROFIT_TARGET_PCT = 0.30;
 const STOP_LOSS_PCT = 0.10;
 
 export async function getBudgetRemaining() {
-  const state = await getBotState();
-  return Math.max(0, MAX_MONTHLY_BUDGET - state.monthly_spend);
+  return getSwingBudgetRemaining();
+}
+
+export async function getMaxMonthlyBudget() {
+  return getSwingTotalAllocated();
 }
 
 export async function canOpenPosition() {
@@ -50,12 +63,14 @@ export async function selectStrike(ticker, direction) {
 }
 
 export async function buildTradeParams(signal) {
-  const expiration = await findMonthlyExpiration();
+  const expiration = await findMonthlyExpiration(signal.ticker);
   const strike = await selectStrike(signal.ticker, signal.direction);
   const premium = await getOptionPremium(signal.ticker, signal.direction, strike, expiration);
   const budgetPerSlot = await calculatePositionSize();
-  const contractCost = premium * 100;
-  const quantity = Math.max(1, Math.floor(budgetPerSlot / contractCost));
+  const budgetRemaining = await getBudgetRemaining();
+  const sizing = ladderPositionSize(budgetPerSlot, premium);
+  const quantity = sizing.quantity;
+  const totalCost = sizing.totalCost;
 
   return {
     ticker: signal.ticker,
@@ -64,40 +79,61 @@ export async function buildTradeParams(signal) {
     expiration,
     premium,
     quantity,
-    totalCost: premium * quantity * 100,
+    totalCost,
+    requiredCost: sizing.requiredCost,
+    affordable: sizing.affordable && quantity > 0 && totalCost <= budgetRemaining,
+    entryContracts: sizing.entryContracts,
+    ladderExitPhase: ladderExitPhase(0),
   };
 }
 
 export async function monitorOpenPositions(notifyClose) {
   const positions = await getOpenPositions();
+  const environment = await getStrategyEnvironment('swing');
   const actions = [];
 
   for (const position of positions) {
-    const currentPremium = await getOptionPremium(
-      position.ticker,
-      position.direction,
-      position.strike,
-      position.expiration
-    );
-
-    const pnlPct = (currentPremium - position.entry_premium) / position.entry_premium;
-    let closeReason = null;
-
-    if (pnlPct >= PROFIT_TARGET_PCT) {
-      closeReason = 'profit_target';
-    } else if (pnlPct <= -STOP_LOSS_PCT) {
-      closeReason = 'stop_loss';
+    let currentPremium;
+    try {
+      currentPremium = await getOptionPremium(
+        position.ticker,
+        position.direction,
+        position.strike,
+        position.expiration
+      );
+    } catch (err) {
+      console.warn(`[Swing] Premium lookup failed for ${position.ticker}:`, err.message);
+      continue;
     }
 
-    if (closeReason) {
-      await closeOptionOrder(position, currentPremium);
-      await closePosition(position.id, currentPremium, pnlPct * 100, closeReason);
-      actions.push({ position, closeReason, pnlPct, exitPremium: currentPremium });
-      if (notifyClose) {
-        await notifyClose(position, closeReason, pnlPct, currentPremium);
-      }
-    } else {
-      actions.push({ position, pnlPct, currentPremium, closeReason: null });
+    try {
+      const action = await handleLadderPositionMonitor(position, {
+        currentPremium,
+        initialStopPct: STOP_LOSS_PCT,
+        isTimeStop: false,
+        updateExcursion: updatePositionExcursion,
+        updateLadderState: updatePositionPyramidState,
+        partialCloseLeg: partialClosePosition,
+        fullClosePosition: closePosition,
+        closeBrokerOrder: (position, exitPremium, quantity) =>
+          closeOptionOrder(position, exitPremium, quantity, { environment, strategy: 'swing' }),
+        onNotify: notifyClose
+          ? async (pos, reason, pnlFrac, exitPremium) => {
+              await notifyClose(pos, reason, pnlFrac, exitPremium);
+            }
+          : null,
+      });
+      actions.push(action);
+    } catch (err) {
+      console.error(`[Swing] Close failed for ${position.ticker}:`, err.message);
+      await sendCloseFailedTelegram({
+        strategy: 'swing',
+        positionId: position.id,
+        ticker: position.ticker,
+        direction: position.direction,
+        strike: position.strike,
+        error: err.message,
+      }).catch(() => {});
     }
   }
 
@@ -126,8 +162,6 @@ export async function getPositionsWithPnL() {
   return enriched;
 }
 
-export async function recordSpend(amount) {
-  await addMonthlySpend(amount);
-}
-
-export { MAX_POSITIONS, MAX_MONTHLY_BUDGET, PROFIT_TARGET_PCT, STOP_LOSS_PCT };
+export { MAX_POSITIONS, SWING_WEEKLY_TOP_OFF as MAX_MONTHLY_BUDGET, STOP_LOSS_PCT };
+/** Top ladder milestone — retained for analytics/diagnosis references. */
+export const PROFIT_TARGET_PCT = LADDER_MILESTONES_PCT[LADDER_MILESTONES_PCT.length - 1];

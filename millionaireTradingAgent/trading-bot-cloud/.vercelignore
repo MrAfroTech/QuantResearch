@@ -1,0 +1,9 @@
+backend/
+scripts/
+railway.json
+Procfile
+.env
+.env.example
+data/
+*.db
+node_modules/

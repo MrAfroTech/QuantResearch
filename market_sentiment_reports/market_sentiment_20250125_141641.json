@@ -1,0 +1,54 @@
+{
+  "timestamp": "2025-01-25T14:16:41.107484",
+  "news_sentiment": {
+    "total_articles": 131,
+    "bullish_count": 47,
+    "bearish_count": 7,
+    "neutral_count": 77
+  },
+  "market_trend": "Strongly Bullish",
+  "top_bullish_articles": [
+    {
+      "title": "Billy Ray Cyrus\u2019 Ex-Wife \u201cGenuinely Worried\u201d After That Viral Performance - Hollywood Reporter",
+      "url": "http://www.hollywoodreporter.com/news/music-news/billy-ray-cyrus-ex-wife-firerose-worried-performance-1236117151/"
+    },
+    {
+      "title": "Best Samsung Galaxy S25 deals: $300 gift cards and free offers at AT&T and Verizon - ZDNet",
+      "url": "https://www.zdnet.com/article/best-samsung-galaxy-s25-deals-300-gift-cards-and-free-offers-at-at-t-and-verizon/"
+    },
+    {
+      "title": "Roundup: Bird flu / Ten Commandments / Airfare cost - Greater Baton Rouge Business Report",
+      "url": "https://www.businessreport.com/article/roundup-bird-flu-ten-commandments-airfare-cost"
+    },
+    {
+      "title": "Emergency contraception pill could be an alternative to mifepristone for abortions, study suggests - The Associated Press",
+      "url": "https://apnews.com/article/abortion-pill-mifepristone-ella-emergency-contraception-feea8d741a3fdefcf53ecec13d17c339"
+    },
+    {
+      "title": "Live updates: Trump to travel to North Carolina, California to tour disaster damage - The Washington Post",
+      "url": "https://www.washingtonpost.com/politics/2025/01/24/trump-presidency-executive-order-news/"
+    }
+  ],
+  "top_bearish_articles": [
+    {
+      "title": "Cincinnati's police union 'frustrated' by President Trump's Jan. 6 pardons - WKRC TV Cincinnati",
+      "url": "https://local12.com/news/local/cincinnati-police-union-frustrated-by-president-trump-jan-6-pardons-united-states-capitol-attack-riot-rioters-violent-offenders-charged-released-jail-prison-fop-lodge-ken-kober-cops-attacked-jd-vance-politics-political"
+    },
+    {
+      "title": "Heidi Montag and Spencer Pratt sue the city of Los Angeles after losing home in fires - WBAL TV Baltimore",
+      "url": "https://www.wbaltv.com/article/heidi-montag-spencer-pratt-palisades-fire-lawsuit/63535134"
+    },
+    {
+      "title": "We\u2019re Doing AI Phrenology Again",
+      "url": "https://gizmodo.com/were-doing-ai-phrenology-again-2000553600"
+    },
+    {
+      "title": "It's been 20 years since Oracle bought two software rivals, changing the market forever",
+      "url": "https://www.theregister.com/2025/01/02/twenty_years_since_oracle_bought_peoplesoft/"
+    },
+    {
+      "title": "Disney's strategy to survive the shift to sports streaming is making the marketplace confusing for viewers",
+      "url": "https://www.businessinsider.com/disney-espn-sports-streaming-strategy-fub-hulu-venu-2025-1"
+    }
+  ]
+}

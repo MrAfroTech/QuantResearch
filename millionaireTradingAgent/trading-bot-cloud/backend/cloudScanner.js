@@ -4,8 +4,8 @@ import {
   getMarketStatus,
 } from './tradierClient.js';
 import { logSignal } from './db.js';
+import { getWatchlist } from './config.js';
 
-const DEFAULT_WATCHLIST = ['SOFI', 'AI', '^VIX'];
 const CALL_REASON =
   'Uptrend confirmed (D+W) — breakout above prev daily high';
 const PUT_REASON =
@@ -18,10 +18,9 @@ export function getLastScanResults() {
   return lastScanResults;
 }
 
-function getWatchlist() {
-  const raw = process.env.WATCHLIST;
-  if (!raw?.trim()) return DEFAULT_WATCHLIST;
-  return raw.split(',').map((t) => t.trim()).filter(Boolean);
+function isSkippedScanSymbol(symbol) {
+  const upper = symbol.trim().toUpperCase();
+  return upper === 'VIX' || upper === '^VIX';
 }
 
 function toBrokerTicker(symbol) {
@@ -40,20 +39,45 @@ function isVixTicker(symbol) {
   return symbol === '^VIX' || symbol === 'VIX';
 }
 
-function formatDate(date) {
-  return date.toISOString().slice(0, 10);
+function getEtDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hours: Number(get('hour')),
+    minutes: Number(get('minute')),
+  };
 }
 
-function daysAgo(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return formatDate(d);
+function formatEtDate(date = new Date()) {
+  const { year, month, day } = getEtDateParts(date);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function weeksAgo(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n * 7);
-  return formatDate(d);
+function shiftEtCalendarDate(date, deltaDays) {
+  const { year, month, day } = getEtDateParts(date);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  utc.setUTCDate(utc.getUTCDate() + deltaDays);
+  return utc.toISOString().slice(0, 10);
+}
+
+function daysAgo(n, from = new Date()) {
+  return shiftEtCalendarDate(from, -n);
+}
+
+function weeksAgo(n, from = new Date()) {
+  return shiftEtCalendarDate(from, -(n * 7));
 }
 
 function mean(values) {
@@ -311,12 +335,12 @@ function buildScanRecord(scan, evaluation) {
 
 async function scanTicker(symbol) {
   const tradierSymbol = toTradierSymbol(symbol);
-  const today = formatDate(new Date());
+  const today = formatEtDate();
 
   const dailyBars = await getHistoricalBars(
     tradierSymbol,
     'daily',
-    daysAgo(210),
+    daysAgo(320),
     today
   );
   const daily = computeDailyMetrics(dailyBars, symbol);

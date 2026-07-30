@@ -33,13 +33,13 @@
 # **************************************************************************** #
 import requests
 import json
+import os 
 
 def fetch_stock_news(symbol, api_key):
     """
-    Diagnostic version to troubleshoot Alpha Vantage news fetching
+    Fetch news articles related to a stock symbol and save the results to a JSON file.
     """
     url = 'https://www.alphavantage.co/query'
-    
     params = {
         'function': 'NEWS_SENTIMENT',
         'tickers': symbol,
@@ -50,30 +50,35 @@ def fetch_stock_news(symbol, api_key):
         response = requests.get(url, params=params)
         response.raise_for_status()  # Raise exception for HTTP errors
         
-        # Print raw response for debugging
-        print("Full API Response:")
-        print(json.dumps(response.json(), indent=2))
-        
         data = response.json()
         
         # Diagnose specific potential issues
         if 'Information' in data:
             print("API Usage Limit Reached:", data['Information'])
+            return None
         
+        # Save to JSON file if the 'feed' key exists
         if 'feed' in data:
             articles = data['feed']
             print(f"Number of articles found: {len(articles)}")
             
-            for article in articles[:3]:  # Print first 3 articles details
-                print("\nArticle Details:")
-                print(f"Title: {article.get('title', 'No Title')}")
-                print(f"URL: {article.get('url', 'No URL')}")
+            # Define output directory and file name
+            output_dir = "data"
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = os.path.join(output_dir, f"{symbol}_sentiment.json")
+            
+            # Save the data to the file
+            with open(output_file, 'w') as json_file:
+                json.dump(data, json_file, indent=2)
+            
+            print(f"Data saved to {output_file}")
         
         return data
     
     except requests.RequestException as e:
         print(f"Request Error: {e}")
         return None
+
 
 # Example usage
 api_key = input("Enter Alpha Vantage API Key: ")
