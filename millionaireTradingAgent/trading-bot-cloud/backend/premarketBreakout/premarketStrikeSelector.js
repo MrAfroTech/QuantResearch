@@ -92,7 +92,15 @@ export async function selectPremarketStrike(entrySignal) {
     throw new Error(`No 0DTE ${direction} option found for ${symbol} @ ~${targetStrike}`);
   }
 
-  const premium = best.mid ?? best.bid ?? best.ask;
+  const bid = best.bid != null ? Number(best.bid) : null;
+  const ask = best.ask != null ? Number(best.ask) : null;
+  const mid =
+    best.mid != null
+      ? Number(best.mid)
+      : Number.isFinite(bid) && Number.isFinite(ask)
+        ? (bid + ask) / 2
+        : null;
+  const premium = mid ?? bid ?? ask;
   if (premium == null) {
     throw new Error(`No quote for ${symbol} ${direction} ${best.strike}`);
   }
@@ -105,6 +113,9 @@ export async function selectPremarketStrike(entrySignal) {
     strike: best.strike,
     expiration,
     premium,
+    bid,
+    ask,
+    mid: mid ?? Number(premium),
     optionSymbol: best.symbol,
     strike_bucket: bucket,
     entry_iv: iv,

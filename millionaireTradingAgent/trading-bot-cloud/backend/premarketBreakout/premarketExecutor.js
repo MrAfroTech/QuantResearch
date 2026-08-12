@@ -4,6 +4,7 @@ import {
   getPremarketMaxPositions,
   PREMARKET_SYMBOLS,
   PREMARKET_MIN_ENTRY_PREMIUM,
+  ENTRY_BELOW_PREMIUM_FLOOR_REASON,
   PREMARKET_STOP_LOSS_PCT,
 } from './premarketConfig.js';
 import {
@@ -13,6 +14,7 @@ import {
   insertPremarketPosition,
   updatePremarketPositionBrokerStop,
   hasPremarketBreakoutExecutedToday,
+  logPremarketEvent,
 } from './premarketDb.js';
 import { getTotalAllocated } from '../budget/budgetAllocations.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
@@ -215,17 +217,39 @@ async function tryExecuteEntry(entry) {
     return { executed: false, reason: 'strike_error' };
   }
 
-  if (isPremiumBelowFloor(strikeSelection.premium, PREMARKET_MIN_ENTRY_PREMIUM)) {
-    const floorLabel =
-      PREMARKET_MIN_ENTRY_PREMIUM != null
-        ? `$${PREMARKET_MIN_ENTRY_PREMIUM}`
-        : 'PREMARKET_MIN_ENTRY_PREMIUM (not set)';
+  // Prefer ask (buy-side quote at confirmation); fall back to selector entry premium.
+  const entryQuote = Number.isFinite(Number(strikeSelection.ask))
+    ? Number(strikeSelection.ask)
+    : Number(strikeSelection.premium);
+  if (isPremiumBelowFloor(entryQuote, PREMARKET_MIN_ENTRY_PREMIUM)) {
+    console.log(
+      `[Premarket] ${ENTRY_BELOW_PREMIUM_FLOOR_REASON} — ${entry.symbol} ${entry.direction}` +
+        ` quote=$${entryQuote} floor=$${PREMARKET_MIN_ENTRY_PREMIUM}` +
+        ` (ask=${strikeSelection.ask} premium=${strikeSelection.premium})`
+    );
+    await logPremarketEvent({
+      ticker: entry.symbol,
+      tradeDate: etDateKey(),
+      eventType: ENTRY_BELOW_PREMIUM_FLOOR_REASON,
+      direction: entry.direction,
+      breakoutLevel: entry.breakout_level,
+      details: {
+        reason: ENTRY_BELOW_PREMIUM_FLOOR_REASON,
+        entry_quote: entryQuote,
+        ask: strikeSelection.ask,
+        premium: strikeSelection.premium,
+        bid: strikeSelection.bid,
+        mid: strikeSelection.mid,
+        min_entry_premium: PREMARKET_MIN_ENTRY_PREMIUM,
+        strike: strikeSelection.strike,
+      },
+    });
     await sendPremarketSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: `Entry premium $${strikeSelection.premium} below minimum floor (${floorLabel})`,
+      reason: `Entry premium $${entryQuote} below minimum floor ($${PREMARKET_MIN_ENTRY_PREMIUM})`,
     });
-    return { executed: false, reason: 'premium_below_floor' };
+    return { executed: false, reason: ENTRY_BELOW_PREMIUM_FLOOR_REASON };
   }
 
   const sizing = positionSize(budgetRemaining, openCount, strikeSelection.premium, maxPositions);

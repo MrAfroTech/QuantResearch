@@ -23,10 +23,16 @@ export const PREMARKET_PROFIT_PCT = 0.175;
 export const PREMARKET_STOP_LOSS_PCT = 0.10;
 
 /**
- * Minimum option entry premium to open a position. null = disabled (set before go-live).
- * Diagnostic reference range: ~$0.75–$1.00 — owner sets the live value.
+ * Minimum option entry premium (ask / entry quote) to open a position.
+ * PROVISIONAL — derived from n=3 real trades under the current 4.25% stop config;
+ * not validated at scale. Stop-market fills slip by a roughly constant dollar amount
+ * (spread/tick), so cheap premium turns fixed $ slippage into outsized % losses
+ * (e.g. 2026-08-12 IWM PUT id 58 @ $0.485 → -$0.079 / -20.62% vs 4.25% trigger).
  */
-export const PREMARKET_MIN_ENTRY_PREMIUM = null;
+export const PREMARKET_MIN_ENTRY_PREMIUM = 0.6;
+
+/** premarket_event_log event_type when entry ask/premium is below PREMARKET_MIN_ENTRY_PREMIUM. */
+export const ENTRY_BELOW_PREMIUM_FLOOR_REASON = 'entry_below_premium_floor';
 
 /** Premarket range window (ET). */
 export const PREMARKET_RANGE_START = { hour: 4, minute: 0 };
