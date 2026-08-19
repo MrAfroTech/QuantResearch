@@ -21,9 +21,112 @@ function formatPct(n) {
   return `${sign}${v.toFixed(2)}%`;
 }
 
+function formatWinRate(budget) {
+  const wins = Number(budget?.wins) || 0;
+  const losses = Number(budget?.losses) || 0;
+  const decided = Number(budget?.closed_trades);
+  const total = Number.isFinite(decided) ? decided : wins + losses;
+  if (total <= 0 || budget?.win_rate_percent == null) {
+    return 'No closed trades yet';
+  }
+  const pct = Number(budget.win_rate_percent);
+  const pctLabel = Number.isFinite(pct) ? `${pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)}%` : '—';
+  return `${pctLabel} (${wins}W / ${losses}L)`;
+}
+
+const STRATEGY_SHORT = {
+  swing: 'SW',
+  orb: 'ORB',
+  premarket: 'PM',
+  emavwap: 'EMA',
+};
+
+function resolveTickerWinStats(tickerWinRates, row) {
+  const map = tickerWinRates || {};
+  const candidates = [
+    row?.tv_ticker,
+    row?.ticker,
+    row?.tv_ticker === 'AI' ? 'C3.AI' : null,
+    row?.ticker === 'C3.AI' ? 'AI' : null,
+  ]
+    .filter(Boolean)
+    .map((t) => String(t).toUpperCase());
+  for (const key of candidates) {
+    if (map[key]) return map[key];
+  }
+  return null;
+}
+
+function TickerWinRateCell({ stats }) {
+  if (!stats || !stats.closed_trades) {
+    return <span style={{ color: '#9ca3af' }}>—</span>;
+  }
+  const stratParts = Object.entries(stats.by_strategy || {})
+    .filter(([, s]) => (s.closed_trades || 0) > 0)
+    .map(([strat, s]) => `${STRATEGY_SHORT[strat] || strat} ${s.wins}W/${s.losses}L`);
+  return (
+    <div style={{ lineHeight: 1.25 }}>
+      <div style={{
+        fontWeight: 600,
+        color: pnlColor(stats.win_rate_percent - 50),
+      }}
+      >
+        {formatWinRate(stats)}
+      </div>
+      {stratParts.length > 1 && (
+        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+          {stratParts.join(' · ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ET_TZ = 'America/New_York';
+
+/** Parse API/DB timestamps (ISO or Postgres-style) for display only. */
+function parseTimestamp(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  let s = String(value).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2} /.test(s) && !s.includes('T')) {
+    s = s.replace(' ', 'T');
+  }
+  if (/\+\d{2}$/.test(s)) s += ':00';
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Time-only in US Eastern (EST/EDT via IANA zone). */
 function formatTime(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString();
+  const d = parseTimestamp(iso);
+  if (!d) return '—';
+  return d.toLocaleTimeString('en-US', {
+    timeZone: ET_TZ,
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
+}
+
+/** Date + time in US Eastern (EST/EDT via IANA zone). */
+function formatDateTimeEt(iso) {
+  const d = parseTimestamp(iso);
+  if (!d) return '—';
+  return d.toLocaleString('en-US', {
+    timeZone: ET_TZ,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
 }
 
 function pnlColor(value) {
@@ -84,6 +187,7 @@ function StrategyBadge({ strategy }) {
   const styles = {
     orb: { bg: '#ede9fe', color: '#6d28d9', label: '0DTE ORB' },
     premarket: { bg: '#ffedd5', color: '#c2410c', label: 'PREMARKET' },
+    emavwap: { bg: '#d1fae5', color: '#047857', label: 'EMA/VWAP' },
     swing: { bg: '#dbeafe', color: '#1d4ed8', label: 'SWING' },
   };
   const s = styles[strategy] || styles.swing;
@@ -261,12 +365,26 @@ export default function Dashboard() {
   const swingBudget = status.swing_budget || { max: 0, spent: 0, remaining: 0 };
   const orbBudget = status.orb_budget || { max: 0, spent: 0, remaining: 0 };
   const premarketBudget = status.premarket_budget || { max: 0, spent: 0, remaining: 0 };
+  const emaVwapBudget = status.emavwap_budget || { max: 0, spent: 0, remaining: 0 };
   const orbStatus = status.orb_status || {};
   const openingRanges = orbStatus.opening_ranges || {};
   const orbSymbols = Object.keys(openingRanges);
   const swingEnv = resolveEnvironment(status, 'swing');
   const orbEnv = resolveEnvironment(status, 'orb');
   const premarketEnv = resolveEnvironment(status, 'premarket');
+  const emaVwapEnv = resolveEnvironment(status, 'emavwap');
+  const tickerWinRateMap = Object.fromEntries(
+    (status.ticker_win_rates || []).map((row) => [String(row.ticker).toUpperCase(), row])
+  );
+  const liveBudgetCards = [
+    { title: 'Swing Budget', budget: swingBudget, env: swingEnv },
+    { title: '0DTE ORB Budget', budget: orbBudget, env: orbEnv },
+    { title: 'Premarket Breakout Budget', budget: premarketBudget, env: premarketEnv },
+    { title: 'EMA/VWAP Budget', budget: emaVwapBudget, env: emaVwapEnv },
+  ].filter(({ env }) => env === 'live');
+  const liveTradeLog = (status.trade_log || []).filter(
+    (t) => resolveEnvironment(status, t.strategy) === 'live'
+  );
 
   return (
     <div>
@@ -332,6 +450,20 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Tracking — near top for immediate visibility */}
+      {status.watchlist?.length > 0 && (
+        <section style={{ ...cardStyle, marginBottom: 16, padding: '14px 16px' }}>
+          <h2 style={{ ...sectionTitleStyle, fontSize: 15 }}>
+            Tracking ({status.watchlist_count ?? status.watchlist.length} symbols)
+          </h2>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {status.watchlist.map((ticker) => (
+              <span key={ticker} style={tickerChipStyle}>{ticker}</span>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Section 2 — Performance Summary */}
       <section style={cardStyle}>
         <h2 style={sectionTitleStyle}>Performance Summary</h2>
@@ -349,83 +481,53 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Section 3 — Budget */}
+      {/* Section 3 — Budget (currently-live strategies only; paper cards stay hidden) */}
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>Budget</h2>
-        <div style={threeColGrid}>
-          <div style={budgetCardInner}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h3 style={{ ...budgetCardTitle, margin: 0 }}>Swing Budget</h3>
-              <EnvironmentBadge environment={swingEnv} />
-            </div>
-            <div style={budgetRow}>
-              <span>Remaining</span>
-              <span style={{ color: '#16a34a', fontWeight: 700 }}>{formatCurrency(swingBudget.remaining)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>Spent</span>
-              <span>{formatCurrency(swingBudget.spent)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>Max</span>
-              <span>{formatCurrency(swingBudget.max)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>ROI %</span>
-              <span style={{ color: pnlColor(swingBudget.roiPercent), fontWeight: 600 }}>
-                {formatPct(swingBudget.roiPercent)}
-              </span>
-            </div>
+        {!liveBudgetCards.length ? (
+          <p style={{ color: '#666', margin: 0 }}>No live strategy budgets</p>
+        ) : (
+          <div style={threeColGrid}>
+            {liveBudgetCards.map(({ title, budget, env }) => (
+              <div key={title} style={budgetCardInner}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <h3 style={{ ...budgetCardTitle, margin: 0 }}>{title}</h3>
+                  <EnvironmentBadge environment={env} />
+                </div>
+                <div style={budgetRow}>
+                  <span>Remaining</span>
+                  <span style={{ color: '#16a34a', fontWeight: 700 }}>{formatCurrency(budget.remaining)}</span>
+                </div>
+                <div style={budgetRow}>
+                  <span>Spent</span>
+                  <span>{formatCurrency(budget.spent)}</span>
+                </div>
+                <div style={budgetRow}>
+                  <span>Max</span>
+                  <span>{formatCurrency(budget.max)}</span>
+                </div>
+                <div style={budgetRow}>
+                  <span>ROI %</span>
+                  <span style={{ color: pnlColor(budget.roiPercent), fontWeight: 600 }}>
+                    {formatPct(budget.roiPercent)}
+                  </span>
+                </div>
+                <div style={{ ...budgetRow, borderBottom: 'none' }}>
+                  <span>Win Rate</span>
+                  <span style={{
+                    fontWeight: 600,
+                    color: budget.win_rate_percent == null
+                      ? '#6b7280'
+                      : pnlColor(budget.win_rate_percent - 50),
+                  }}
+                  >
+                    {formatWinRate(budget)}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
-          <div style={budgetCardInner}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h3 style={{ ...budgetCardTitle, margin: 0 }}>0DTE ORB Budget</h3>
-              <EnvironmentBadge environment={orbEnv} />
-            </div>
-            <div style={budgetRow}>
-              <span>Remaining</span>
-              <span style={{ color: '#16a34a', fontWeight: 700 }}>{formatCurrency(orbBudget.remaining)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>Spent</span>
-              <span>{formatCurrency(orbBudget.spent)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>Max</span>
-              <span>{formatCurrency(orbBudget.max)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>ROI %</span>
-              <span style={{ color: pnlColor(orbBudget.roiPercent), fontWeight: 600 }}>
-                {formatPct(orbBudget.roiPercent)}
-              </span>
-            </div>
-          </div>
-          <div style={budgetCardInner}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h3 style={{ ...budgetCardTitle, margin: 0 }}>Premarket Breakout Budget</h3>
-              <EnvironmentBadge environment={premarketEnv} />
-            </div>
-            <div style={budgetRow}>
-              <span>Remaining</span>
-              <span style={{ color: '#16a34a', fontWeight: 700 }}>{formatCurrency(premarketBudget.remaining)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>Spent</span>
-              <span>{formatCurrency(premarketBudget.spent)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>Max</span>
-              <span>{formatCurrency(premarketBudget.max)}</span>
-            </div>
-            <div style={budgetRow}>
-              <span>ROI %</span>
-              <span style={{ color: pnlColor(premarketBudget.roiPercent), fontWeight: 600 }}>
-                {formatPct(premarketBudget.roiPercent)}
-              </span>
-            </div>
-          </div>
-        </div>
+        )}
       </section>
 
       {/* Section 4 — Open Positions */}
@@ -479,11 +581,11 @@ export default function Dashboard() {
         )}
       </section>
 
-      {/* Section 5 — Trade Log */}
+      {/* Section 5 — Trade Log (currently-live strategies only) */}
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>Trade Log</h2>
-        {!status.trade_log?.length ? (
-          <p style={{ color: '#666', margin: 0 }}>No closed trades yet</p>
+        {!liveTradeLog.length ? (
+          <p style={{ color: '#666', margin: 0 }}>No closed live trades yet</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={tableStyle}>
@@ -500,9 +602,9 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {status.trade_log.map((t) => (
+                {liveTradeLog.map((t) => (
                   <tr key={`${t.strategy}-${t.id ?? `${t.date}-${t.ticker}`}`}>
-                    <td style={tdStyle}>{t.date || t.closed_at}</td>
+                    <td style={tdStyle}>{formatDateTimeEt(t.date || t.closed_at)}</td>
                     <td style={tdStyle}><StrategyBadge strategy={t.strategy} /></td>
                     <td style={tdStyle}>{t.ticker}</td>
                     <td style={{
@@ -528,20 +630,6 @@ export default function Dashboard() {
       {/* Divider */}
       <div style={dividerStyle}>Research & Signals ↓</div>
 
-      {/* Tracking chips (preserved data) */}
-      {status.watchlist?.length > 0 && (
-        <section style={{ ...cardStyle, marginTop: 16, padding: '14px 16px' }}>
-          <h2 style={{ ...sectionTitleStyle, fontSize: 15 }}>
-            Tracking ({status.watchlist_count ?? status.watchlist.length} symbols)
-          </h2>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {status.watchlist.map((ticker) => (
-              <span key={ticker} style={tickerChipStyle}>{ticker}</span>
-            ))}
-          </div>
-        </section>
-      )}
-
       {/* Section 6 — Last Signal Checked */}
       {status.last_signal_checked && (
         <section style={{ ...cardStyle, marginTop: 16 }}>
@@ -553,7 +641,7 @@ export default function Dashboard() {
               <tr><td style={tdLabel}>Result</td><td>{status.last_signal_checked.result}</td></tr>
               <tr><td style={tdLabel}>Direction</td><td>{status.last_signal_checked.direction || '—'}</td></tr>
               <tr><td style={tdLabel}>Confidence</td><td>{status.last_signal_checked.confidence || '—'}</td></tr>
-              <tr><td style={tdLabel}>Checked</td><td>{status.last_signal_checked.checked_at}</td></tr>
+              <tr><td style={tdLabel}>Checked</td><td>{formatDateTimeEt(status.last_signal_checked.checked_at)}</td></tr>
             </tbody>
           </table>
         </section>
@@ -578,6 +666,7 @@ export default function Dashboard() {
                   <th style={thStyle}>Volume</th>
                   <th style={thStyle}>WoW</th>
                   <th style={thStyle}>Signal</th>
+                  <th style={thStyle}>Win Rate</th>
                 </tr>
               </thead>
               <tbody>
@@ -613,6 +702,9 @@ export default function Dashboard() {
                       fontWeight: row.signal === 'CALL' || row.signal === 'PUT' ? 700 : undefined,
                     }}>
                       {row.signal || '—'}
+                    </td>
+                    <td style={tdStyle}>
+                      <TickerWinRateCell stats={resolveTickerWinStats(tickerWinRateMap, row)} />
                     </td>
                   </tr>
                 ))}

@@ -15,6 +15,7 @@ import { getLastScanResults } from './cloudScanner.js';
 import { getWatchlist, areDashboardControlsEnabled } from './config.js';
 import { getPremarketOpenPositions, getPremarketTradeLog } from './premarketBreakout/premarketDb.js';
 import { getOrbOpenPositions } from './orb/orbDb.js';
+import { getEmaVwapOpenPositions } from './emaVwapCross/emaVwapDb.js';
 import { loadSymbolRangeState } from './orb/orbRangeState.js';
 import { getDashboardBudgets } from './budget/budgetAllocations.js';
 import {
@@ -24,7 +25,7 @@ import {
 import { isNeverOpenedCloseReason } from './tradePnl.js';
 
 const ORB_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
-const TRADE_LOG_LIMIT = 20;
+const TRADE_LOG_LIMIT = 40;
 
 let schemaReady;
 
@@ -135,10 +136,114 @@ function computeRoiPercent(allTimePnlDollars, maxBudget) {
   return Number(((pnl / max) * 100).toFixed(2));
 }
 
+/**
+ * All-time win rate from closed legs (same window as ROI %).
+ * Excludes never-opened closes; breakeven ($0) legs are omitted from W/L counts.
+ */
+function computeWinRateStats(trades) {
+  let wins = 0;
+  let losses = 0;
+  for (const trade of trades || []) {
+    if (isNeverOpenedCloseReason(trade.close_reason)) continue;
+    const pnl = tradePnlDollars(trade);
+    if (pnl > 0) wins += 1;
+    else if (pnl < 0) losses += 1;
+  }
+  const decided = wins + losses;
+  return {
+    wins,
+    losses,
+    closed_trades: decided,
+    win_rate_percent:
+      decided === 0 ? null : Number(((wins / decided) * 100).toFixed(1)),
+  };
+}
+
+const STRATEGY_LABELS = {
+  swing: 'swing',
+  orb: 'orb',
+  premarket: 'premarket',
+  emavwap: 'emavwap',
+};
+
+/**
+ * Per-ticker all-time W/L across strategies (same rules as strategy win rate).
+ * Returns one entry per watchlist symbol (plus any traded tickers not on the list).
+ */
+function computeTickerWinRates(labeledTradeGroups, watchlist = []) {
+  const byTicker = new Map();
+
+  function ensure(ticker) {
+    const key = String(ticker || '').toUpperCase();
+    if (!key) return null;
+    if (!byTicker.has(key)) {
+      byTicker.set(key, {
+        ticker: key,
+        wins: 0,
+        losses: 0,
+        closed_trades: 0,
+        win_rate_percent: null,
+        by_strategy: {},
+      });
+    }
+    return byTicker.get(key);
+  }
+
+  for (const symbol of watchlist) ensure(symbol);
+
+  for (const { strategy, trades } of labeledTradeGroups || []) {
+    const strat = STRATEGY_LABELS[strategy] || strategy;
+    for (const trade of trades || []) {
+      const entry = ensure(trade.ticker);
+      if (!entry) continue;
+      if (isNeverOpenedCloseReason(trade.close_reason)) continue;
+      const pnl = tradePnlDollars(trade);
+      if (!(pnl > 0) && !(pnl < 0)) continue;
+      if (!entry.by_strategy[strat]) {
+        entry.by_strategy[strat] = { wins: 0, losses: 0, closed_trades: 0, win_rate_percent: null };
+      }
+      const stratStats = entry.by_strategy[strat];
+      if (pnl > 0) {
+        entry.wins += 1;
+        stratStats.wins += 1;
+      } else {
+        entry.losses += 1;
+        stratStats.losses += 1;
+      }
+    }
+  }
+
+  for (const entry of byTicker.values()) {
+    entry.closed_trades = entry.wins + entry.losses;
+    entry.win_rate_percent =
+      entry.closed_trades === 0
+        ? null
+        : Number(((entry.wins / entry.closed_trades) * 100).toFixed(1));
+    for (const stratStats of Object.values(entry.by_strategy)) {
+      stratStats.closed_trades = stratStats.wins + stratStats.losses;
+      stratStats.win_rate_percent =
+        stratStats.closed_trades === 0
+          ? null
+          : Number(((stratStats.wins / stratStats.closed_trades) * 100).toFixed(1));
+    }
+  }
+
+  const watchKeys = new Set((watchlist || []).map((t) => String(t).toUpperCase()));
+  const ordered = [];
+  for (const symbol of watchlist || []) {
+    const key = String(symbol).toUpperCase();
+    if (byTicker.has(key)) ordered.push(byTicker.get(key));
+  }
+  for (const [key, entry] of byTicker) {
+    if (!watchKeys.has(key) && entry.closed_trades > 0) ordered.push(entry);
+  }
+  return ordered;
+}
+
 async function fetchAllSwingTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT entry_premium, exit_premium, quantity
+    SELECT ticker, entry_premium, exit_premium, quantity, close_reason
     FROM trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -147,7 +252,7 @@ async function fetchAllSwingTradesForPnl() {
 async function fetchAllOrbTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT entry_premium, exit_premium, quantity, realized_pnl
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
     FROM orb_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -156,8 +261,17 @@ async function fetchAllOrbTradesForPnl() {
 async function fetchAllPremarketTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT entry_premium, exit_premium, quantity, realized_pnl
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
     FROM premarket_trade_log
+  `;
+  return rows.map((row) => Object.fromEntries(Object.entries(row)));
+}
+
+async function fetchAllEmaVwapTradesForPnl() {
+  const sql = getSql();
+  const rows = await sql`
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    FROM emavwap_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
 }
@@ -169,10 +283,49 @@ function isOpenedThisMonth(openedAt) {
   return key === etMonthKey();
 }
 
-function computePerformance(trades, openPositions) {
+/** Headline Monthly / All-Time P&L floor. Daily / Weekly cards do not use this. */
+export const HEADLINE_PNL_START_UTC = '2026-08-14T00:00:00Z';
+const HEADLINE_PNL_START_MS = Date.parse(HEADLINE_PNL_START_UTC);
+
+function liveStrategyKeys(environments = {}) {
+  return new Set(
+    Object.entries(environments)
+      .filter(([, env]) => String(env).toLowerCase() === 'live')
+      .map(([strategy]) => strategy)
+  );
+}
+
+function parseClosedAtMs(trade) {
+  if (!trade?.closed_at) return null;
+  let s = String(trade.closed_at).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2} /.test(s) && !s.includes('T')) {
+    s = s.replace(' ', 'T');
+  }
+  if (/\+\d{2}$/.test(s)) s += ':00';
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function closedAtOnOrAfterHeadlineStart(trade) {
+  const ms = parseClosedAtMs(trade);
+  if (ms != null) return ms >= HEADLINE_PNL_START_MS;
+  const closeKey = parseClosedAtEt(trade);
+  return Boolean(closeKey) && closeKey >= HEADLINE_PNL_START_UTC.slice(0, 10);
+}
+
+/**
+ * Daily / Weekly: all strategies, no date floor (unchanged).
+ * Monthly / All-Time: currently-live strategies only, closed_at >= HEADLINE_PNL_START_UTC.
+ *
+ * Live/paper is the *current* strategy-level flag (bot_state / emavwap_state), applied
+ * retroactively to the date window — trade logs have no per-trade environment column.
+ */
+export function computePerformance(trades, openPositions, environments = {}) {
   const todayKey = etDateKey();
   const weekStart = mondayOfWeekEt();
   const monthKey = etMonthKey();
+  const liveKeys = liveStrategyKeys(environments);
 
   let dailyPnl = 0;
   let weeklyPnl = 0;
@@ -183,9 +336,12 @@ function computePerformance(trades, openPositions) {
     const closeKey = parseClosedAtEt(trade);
     if (!closeKey) continue;
     const pnl = tradePnlDollars(trade);
-    alltimePnl += pnl;
     if (closeKey === todayKey) dailyPnl += pnl;
     if (closeKey >= weekStart) weeklyPnl += pnl;
+
+    if (!liveKeys.has(trade._strategy)) continue;
+    if (!closedAtOnOrAfterHeadlineStart(trade)) continue;
+    alltimePnl += pnl;
     if (closeKey.slice(0, 7) === monthKey) monthlyPnl += pnl;
   }
 
@@ -201,7 +357,14 @@ function computePerformance(trades, openPositions) {
   };
 }
 
-function toBudgetCard(snapshot, allTimePnlDollars = null) {
+function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
+  const emptyWin = {
+    wins: 0,
+    losses: 0,
+    closed_trades: 0,
+    win_rate_percent: null,
+  };
+  const win = winStats || emptyWin;
   if (!snapshot) {
     return {
       environment: 'paper',
@@ -209,6 +372,7 @@ function toBudgetCard(snapshot, allTimePnlDollars = null) {
       spent: 0,
       remaining: 0,
       roiPercent: null,
+      ...emptyWin,
     };
   }
   const max = snapshot.max ?? snapshot.total_allocated ?? 0;
@@ -218,26 +382,51 @@ function toBudgetCard(snapshot, allTimePnlDollars = null) {
     spent: snapshot.spent ?? 0,
     remaining: snapshot.remaining ?? 0,
     roiPercent: computeRoiPercent(allTimePnlDollars, max),
+    wins: win.wins,
+    losses: win.losses,
+    closed_trades: win.closed_trades,
+    win_rate_percent: win.win_rate_percent,
   };
 }
 
-async function computeAllStrategyBudgets() {
-  const [budgets, swingTrades, orbTrades, premarketTrades] = await Promise.all([
+async function computeAllStrategyBudgets(watchlist = []) {
+  const [budgets, swingTrades, orbTrades, premarketTrades, emaVwapTrades] = await Promise.all([
     getDashboardBudgets(),
     fetchAllSwingTradesForPnl(),
     fetchAllOrbTradesForPnl(),
     fetchAllPremarketTradesForPnl(),
+    fetchAllEmaVwapTradesForPnl(),
   ]);
 
   const swingPnl = sumTradeLogPnlDollars(swingTrades);
   const orbPnl = sumTradeLogPnlDollars(orbTrades);
   const premarketPnl = sumTradeLogPnlDollars(premarketTrades);
+  const emaVwapPnl = sumTradeLogPnlDollars(emaVwapTrades);
+
+  const ticker_win_rates = computeTickerWinRates(
+    [
+      { strategy: 'swing', trades: swingTrades },
+      { strategy: 'orb', trades: orbTrades },
+      { strategy: 'premarket', trades: premarketTrades },
+      { strategy: 'emavwap', trades: emaVwapTrades },
+    ],
+    watchlist
+  );
 
   return {
-    swing_budget: toBudgetCard(budgets.swing_budget, swingPnl),
-    orb_budget: toBudgetCard(budgets.orb_budget, orbPnl),
-    premarket_budget: toBudgetCard(budgets.premarket_budget, premarketPnl),
-    emavwap_budget: toBudgetCard(budgets.emavwap_budget),
+    swing_budget: toBudgetCard(budgets.swing_budget, swingPnl, computeWinRateStats(swingTrades)),
+    orb_budget: toBudgetCard(budgets.orb_budget, orbPnl, computeWinRateStats(orbTrades)),
+    premarket_budget: toBudgetCard(
+      budgets.premarket_budget,
+      premarketPnl,
+      computeWinRateStats(premarketTrades)
+    ),
+    emavwap_budget: toBudgetCard(
+      budgets.emavwap_budget,
+      emaVwapPnl,
+      computeWinRateStats(emaVwapTrades)
+    ),
+    ticker_win_rates,
   };
 }
 
@@ -269,6 +458,14 @@ async function fetchOrbTradeLog(limit = 500) {
   const sql = getSql();
   const rows = await sql`
     SELECT * FROM orb_trade_log ORDER BY closed_at DESC LIMIT ${limit}
+  `;
+  return rows.map((row) => Object.fromEntries(Object.entries(row)));
+}
+
+async function fetchEmaVwapTradeLog(limit = 500) {
+  const sql = getSql();
+  const rows = await sql`
+    SELECT * FROM emavwap_trade_log ORDER BY closed_at DESC LIMIT ${limit}
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
 }
@@ -401,30 +598,42 @@ export async function buildStatusResponse() {
   await ensureHandlerSchema();
 
   const state = await getBotState();
-  const [rawSwingPositions, orbPositionsRaw, premarketPositionsRaw, environments] = await Promise.all([
+  const [
+    rawSwingPositions,
+    orbPositionsRaw,
+    premarketPositionsRaw,
+    emaVwapPositionsRaw,
+    environments,
+  ] = await Promise.all([
     getPositionsWithPnL(),
     getOrbOpenPositions(),
     getPremarketOpenPositions(),
+    getEmaVwapOpenPositions(),
     getAllStrategyEnvironments(),
   ]);
-  const [orbPositions, premarketPositions] = await Promise.all([
+  const [orbPositions, premarketPositions, emaVwapPositions] = await Promise.all([
     enrichPositionsWithPnL(orbPositionsRaw),
     enrichPositionsWithPnL(premarketPositionsRaw),
+    enrichPositionsWithPnL(emaVwapPositionsRaw),
   ]);
 
-  const [swingTrades, orbTrades, premarketTrades] = await Promise.all([
+  const [swingTrades, orbTrades, premarketTrades, emaVwapTrades] = await Promise.all([
     getTradeLog(500),
     fetchOrbTradeLog(500),
     getPremarketTradeLog(500),
+    fetchEmaVwapTradeLog(500),
   ]);
 
   const allTrades = [
     ...swingTrades.map((t) => ({ ...t, _strategy: 'swing' })),
     ...orbTrades.map((t) => ({ ...t, _strategy: 'orb' })),
     ...premarketTrades.map((t) => ({ ...t, _strategy: 'premarket' })),
+    ...emaVwapTrades.map((t) => ({ ...t, _strategy: 'emavwap' })),
   ].sort((a, b) => String(b.closed_at || '').localeCompare(String(a.closed_at || '')));
 
+  const liveKeys = liveStrategyKeys(environments);
   const tradeLog = allTrades
+    .filter((trade) => liveKeys.has(trade._strategy))
     .slice(0, TRADE_LOG_LIMIT)
     .map((trade) => mapTradeLogEntry(trade, trade._strategy));
 
@@ -436,7 +645,7 @@ export async function buildStatusResponse() {
   const orbMode = state.orb_mode || 'AUTO';
   const premarketMode = state.premarket_mode || 'AUTO';
   const [budgets, orbStatus] = await Promise.all([
-    computeAllStrategyBudgets(),
+    computeAllStrategyBudgets(watchlist),
     buildOrbStatus(scanResults),
   ]);
   const swingBudget = budgets.swing_budget;
@@ -445,13 +654,19 @@ export async function buildStatusResponse() {
     ...rawSwingPositions.map((p) => mapOpenPosition(p, 'swing')),
     ...orbPositions.map((p) => mapOpenPosition(p, 'orb')),
     ...premarketPositions.map((p) => mapOpenPosition(p, 'premarket')),
+    ...emaVwapPositions.map((p) => mapOpenPosition(p, 'emavwap')),
   ];
 
-  const performance = computePerformance(allTrades, [
-    ...rawSwingPositions,
-    ...orbPositions,
-    ...premarketPositions,
-  ]);
+  const performance = computePerformance(
+    allTrades,
+    [
+      ...rawSwingPositions,
+      ...orbPositions,
+      ...premarketPositions,
+      ...emaVwapPositions,
+    ],
+    environments
+  );
 
   return {
     execution_mode: state.execution_mode,
@@ -477,6 +692,7 @@ export async function buildStatusResponse() {
     orb_budget: budgets.orb_budget,
     premarket_budget: budgets.premarket_budget,
     emavwap_budget: budgets.emavwap_budget,
+    ticker_win_rates: budgets.ticker_win_rates || [],
     orb_status: orbStatus,
     watchlist,
     watchlist_count: watchlist.length,
