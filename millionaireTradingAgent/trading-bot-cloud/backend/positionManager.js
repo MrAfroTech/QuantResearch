@@ -25,7 +25,8 @@ import { getStrategyEnvironment } from './strategyEnvironment.js';
 import { sendCloseFailedTelegram } from './telegramHandler.js';
 
 const MAX_POSITIONS = 3;
-const STOP_LOSS_PCT = 0.10;
+const STOP_LOSS_PCT = 0.0175;      // 1.75% soft stop (Swing strategy)
+const SWING_HARD_STOP_PCT = 0.02;  // 2% hard stop (poll-based trigger)
 
 export async function getBudgetRemaining() {
   return getSwingBudgetRemaining();
@@ -162,6 +163,6 @@ export async function getPositionsWithPnL() {
   return enriched;
 }
 
-export { MAX_POSITIONS, SWING_WEEKLY_TOP_OFF as MAX_MONTHLY_BUDGET, STOP_LOSS_PCT };
+export { MAX_POSITIONS, SWING_WEEKLY_TOP_OFF as MAX_MONTHLY_BUDGET, STOP_LOSS_PCT, SWING_HARD_STOP_PCT };
 /** Top ladder milestone — retained for analytics/diagnosis references. */
 export const PROFIT_TARGET_PCT = LADDER_MILESTONES_PCT[LADDER_MILESTONES_PCT.length - 1];

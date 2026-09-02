@@ -9,7 +9,8 @@ export const EMA_PERIOD = 9;
 
 /** Profit target and stop loss (fraction of premium). Independently tunable. */
 export const EMA_VWAP_PROFIT_PCT = 0.175;
-export const EMA_VWAP_STOP_LOSS_PCT = 0.10;
+export const EMA_VWAP_STOP_LOSS_PCT = 0.0175;  // 1.75% soft stop
+export const EMA_VWAP_HARD_STOP_PCT = 0.02;    // 2% hard stop (poll-based trigger)
 
 /**
  * Minimum option entry premium to open a position. null = disabled (set before go-live).

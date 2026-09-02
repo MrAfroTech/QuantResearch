@@ -23,15 +23,28 @@ import assert from 'node:assert';
 describe('Config Drift Protection - Stop Loss Values', () => {
   
   describe('ORB Strategy', () => {
-    it('should maintain ORB_STOP_LOSS_PCT at configured value', async () => {
+    it('should maintain ORB_STOP_LOSS_PCT at configured value (1% soft stop)', async () => {
       const { ORB_STOP_LOSS_PCT } = await import('../../backend/orb/orbConfig.js');
       
-      const EXPECTED_VALUE = 0.10; // 10% - current actual value
+      const EXPECTED_VALUE = 0.01; // 1% soft stop
       
       assert.strictEqual(
         ORB_STOP_LOSS_PCT,
         EXPECTED_VALUE,
-        `ORB_STOP_LOSS_PCT has drifted! Expected ${EXPECTED_VALUE} (10%), got ${ORB_STOP_LOSS_PCT}. ` +
+        `ORB_STOP_LOSS_PCT has drifted! Expected ${EXPECTED_VALUE} (1%), got ${ORB_STOP_LOSS_PCT}. ` +
+        `This is a CRITICAL config drift for a LIVE trading strategy.`
+      );
+    });
+    
+    it('should maintain ORB_HARD_STOP_PCT at configured value (1.75% hard stop)', async () => {
+      const { ORB_HARD_STOP_PCT } = await import('../../backend/orb/orbConfig.js');
+      
+      const EXPECTED_VALUE = 0.0175; // 1.75% hard stop
+      
+      assert.strictEqual(
+        ORB_HARD_STOP_PCT,
+        EXPECTED_VALUE,
+        `ORB_HARD_STOP_PCT has drifted! Expected ${EXPECTED_VALUE} (1.75%), got ${ORB_HARD_STOP_PCT}. ` +
         `This is a CRITICAL config drift for a LIVE trading strategy.`
       );
     });
@@ -58,15 +71,28 @@ describe('Config Drift Protection - Stop Loss Values', () => {
   });
   
   describe('Premarket Strategy', () => {
-    it('should maintain PREMARKET_STOP_LOSS_PCT at configured value', async () => {
+    it('should maintain PREMARKET_STOP_LOSS_PCT at configured value (1% soft stop)', async () => {
       const { PREMARKET_STOP_LOSS_PCT } = await import('../../backend/premarketBreakout/premarketConfig.js');
       
-      const EXPECTED_VALUE = 0.10; // 10% - current actual value
+      const EXPECTED_VALUE = 0.01; // 1% soft stop
       
       assert.strictEqual(
         PREMARKET_STOP_LOSS_PCT,
         EXPECTED_VALUE,
-        `PREMARKET_STOP_LOSS_PCT has drifted! Expected ${EXPECTED_VALUE} (10%), got ${PREMARKET_STOP_LOSS_PCT}. ` +
+        `PREMARKET_STOP_LOSS_PCT has drifted! Expected ${EXPECTED_VALUE} (1%), got ${PREMARKET_STOP_LOSS_PCT}. ` +
+        `This is a CRITICAL config drift for a LIVE trading strategy.`
+      );
+    });
+    
+    it('should maintain PREMARKET_HARD_STOP_TRIGGER at configured value (1.75% hard stop)', async () => {
+      const { PREMARKET_HARD_STOP_TRIGGER } = await import('../../backend/premarketBreakout/premarketConfig.js');
+      
+      const EXPECTED_VALUE = 0.0175; // 1.75% hard stop
+      
+      assert.strictEqual(
+        PREMARKET_HARD_STOP_TRIGGER,
+        EXPECTED_VALUE,
+        `PREMARKET_HARD_STOP_TRIGGER has drifted! Expected ${EXPECTED_VALUE} (1.75%), got ${PREMARKET_HARD_STOP_TRIGGER}. ` +
         `This is a CRITICAL config drift for a LIVE trading strategy.`
       );
     });
@@ -93,15 +119,28 @@ describe('Config Drift Protection - Stop Loss Values', () => {
   });
   
   describe('EMA/VWAP Strategy', () => {
-    it('should maintain EMA_VWAP_STOP_LOSS_PCT at configured value', async () => {
+    it('should maintain EMA_VWAP_STOP_LOSS_PCT at configured value (1.75% soft stop)', async () => {
       const { EMA_VWAP_STOP_LOSS_PCT } = await import('../../backend/emaVwapCross/emaVwapConfig.js');
       
-      const EXPECTED_VALUE = 0.10; // 10% - current actual value
+      const EXPECTED_VALUE = 0.0175; // 1.75% soft stop
       
       assert.strictEqual(
         EMA_VWAP_STOP_LOSS_PCT,
         EXPECTED_VALUE,
-        `EMA_VWAP_STOP_LOSS_PCT has drifted! Expected ${EXPECTED_VALUE} (10%), got ${EMA_VWAP_STOP_LOSS_PCT}. ` +
+        `EMA_VWAP_STOP_LOSS_PCT has drifted! Expected ${EXPECTED_VALUE} (1.75%), got ${EMA_VWAP_STOP_LOSS_PCT}. ` +
+        `This is a CRITICAL config drift for a LIVE trading strategy.`
+      );
+    });
+    
+    it('should maintain EMA_VWAP_HARD_STOP_PCT at configured value (2% hard stop)', async () => {
+      const { EMA_VWAP_HARD_STOP_PCT } = await import('../../backend/emaVwapCross/emaVwapConfig.js');
+      
+      const EXPECTED_VALUE = 0.02; // 2% hard stop
+      
+      assert.strictEqual(
+        EMA_VWAP_HARD_STOP_PCT,
+        EXPECTED_VALUE,
+        `EMA_VWAP_HARD_STOP_PCT has drifted! Expected ${EXPECTED_VALUE} (2%), got ${EMA_VWAP_HARD_STOP_PCT}. ` +
         `This is a CRITICAL config drift for a LIVE trading strategy.`
       );
     });
@@ -128,15 +167,28 @@ describe('Config Drift Protection - Stop Loss Values', () => {
   });
   
   describe('Swing Strategy', () => {
-    it('should maintain STOP_LOSS_PCT at configured value', async () => {
+    it('should maintain STOP_LOSS_PCT at configured value (1.75% soft stop)', async () => {
       const { STOP_LOSS_PCT } = await import('../../backend/positionManager.js');
       
-      const EXPECTED_VALUE = 0.10; // 10% - current actual value
+      const EXPECTED_VALUE = 0.0175; // 1.75% soft stop
       
       assert.strictEqual(
         STOP_LOSS_PCT,
         EXPECTED_VALUE,
-        `STOP_LOSS_PCT (Swing) has drifted! Expected ${EXPECTED_VALUE} (10%), got ${STOP_LOSS_PCT}. ` +
+        `STOP_LOSS_PCT (Swing) has drifted! Expected ${EXPECTED_VALUE} (1.75%), got ${STOP_LOSS_PCT}. ` +
+        `This is a CRITICAL config drift for a PAPER trading strategy.`
+      );
+    });
+    
+    it('should maintain SWING_HARD_STOP_PCT at configured value (2% hard stop)', async () => {
+      const { SWING_HARD_STOP_PCT } = await import('../../backend/positionManager.js');
+      
+      const EXPECTED_VALUE = 0.02; // 2% hard stop
+      
+      assert.strictEqual(
+        SWING_HARD_STOP_PCT,
+        EXPECTED_VALUE,
+        `SWING_HARD_STOP_PCT has drifted! Expected ${EXPECTED_VALUE} (2%), got ${SWING_HARD_STOP_PCT}. ` +
         `This is a CRITICAL config drift for a PAPER trading strategy.`
       );
     });
@@ -177,36 +229,44 @@ describe('Config Drift Protection - Stop Loss Values', () => {
     });
   });
   
-  describe('Cross-Strategy Consistency', () => {
-    it('should have matching stop values across all strategies (current state)', async () => {
-      const { ORB_STOP_LOSS_PCT } = await import('../../backend/orb/orbConfig.js');
-      const { PREMARKET_STOP_LOSS_PCT } = await import('../../backend/premarketBreakout/premarketConfig.js');
-      const { EMA_VWAP_STOP_LOSS_PCT } = await import('../../backend/emaVwapCross/emaVwapConfig.js');
-      const { STOP_LOSS_PCT } = await import('../../backend/positionManager.js');
-      const { LADDER_INITIAL_STOP_PCT } = await import('../../backend/ladder/ladderConfig.js');
+  describe('Cross-Strategy Value Verification', () => {
+    it('should have correct stop values per strategy (not shared)', async () => {
+      const { ORB_STOP_LOSS_PCT, ORB_HARD_STOP_PCT } = await import('../../backend/orb/orbConfig.js');
+      const { PREMARKET_STOP_LOSS_PCT, PREMARKET_HARD_STOP_TRIGGER } = await import('../../backend/premarketBreakout/premarketConfig.js');
+      const { EMA_VWAP_STOP_LOSS_PCT, EMA_VWAP_HARD_STOP_PCT } = await import('../../backend/emaVwapCross/emaVwapConfig.js');
+      const { STOP_LOSS_PCT, SWING_HARD_STOP_PCT } = await import('../../backend/positionManager.js');
       
-      // Currently all strategies use the same 10% value
-      const allValues = [
-        ORB_STOP_LOSS_PCT,
-        PREMARKET_STOP_LOSS_PCT,
-        EMA_VWAP_STOP_LOSS_PCT,
-        STOP_LOSS_PCT,
-        LADDER_INITIAL_STOP_PCT
-      ];
+      // ORB: 1% soft, 1.75% hard
+      assert.strictEqual(ORB_STOP_LOSS_PCT, 0.01, 'ORB soft stop should be 1%');
+      assert.strictEqual(ORB_HARD_STOP_PCT, 0.0175, 'ORB hard stop should be 1.75%');
       
-      const uniqueValues = [...new Set(allValues)];
+      // Premarket: 1% soft, 1.75% hard
+      assert.strictEqual(PREMARKET_STOP_LOSS_PCT, 0.01, 'Premarket soft stop should be 1%');
+      assert.strictEqual(PREMARKET_HARD_STOP_TRIGGER, 0.0175, 'Premarket hard stop should be 1.75%');
       
-      assert.strictEqual(
-        uniqueValues.length,
-        1,
-        `Expected all strategies to have same stop value (current state), but found ${uniqueValues.length} different values: ${uniqueValues.join(', ')}`
-      );
+      // Swing: 1.75% soft, 2% hard
+      assert.strictEqual(STOP_LOSS_PCT, 0.0175, 'Swing soft stop should be 1.75%');
+      assert.strictEqual(SWING_HARD_STOP_PCT, 0.02, 'Swing hard stop should be 2%');
       
-      assert.strictEqual(
-        uniqueValues[0],
-        0.10,
-        'All strategies should currently use 0.10 (10%)'
-      );
+      // EMA/VWAP: 1.75% soft, 2% hard
+      assert.strictEqual(EMA_VWAP_STOP_LOSS_PCT, 0.0175, 'EMA/VWAP soft stop should be 1.75%');
+      assert.strictEqual(EMA_VWAP_HARD_STOP_PCT, 0.02, 'EMA/VWAP hard stop should be 2%');
+    });
+    
+    it('should verify ORB and Premarket share same stops (1%, 1.75%)', async () => {
+      const { ORB_STOP_LOSS_PCT, ORB_HARD_STOP_PCT } = await import('../../backend/orb/orbConfig.js');
+      const { PREMARKET_STOP_LOSS_PCT, PREMARKET_HARD_STOP_TRIGGER } = await import('../../backend/premarketBreakout/premarketConfig.js');
+      
+      assert.strictEqual(ORB_STOP_LOSS_PCT, PREMARKET_STOP_LOSS_PCT, 'ORB and Premarket should have same soft stop');
+      assert.strictEqual(ORB_HARD_STOP_PCT, PREMARKET_HARD_STOP_TRIGGER, 'ORB and Premarket should have same hard stop');
+    });
+    
+    it('should verify Swing and EMA/VWAP share same stops (1.75%, 2%)', async () => {
+      const { STOP_LOSS_PCT, SWING_HARD_STOP_PCT } = await import('../../backend/positionManager.js');
+      const { EMA_VWAP_STOP_LOSS_PCT, EMA_VWAP_HARD_STOP_PCT } = await import('../../backend/emaVwapCross/emaVwapConfig.js');
+      
+      assert.strictEqual(STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT, 'Swing and EMA/VWAP should have same soft stop');
+      assert.strictEqual(SWING_HARD_STOP_PCT, EMA_VWAP_HARD_STOP_PCT, 'Swing and EMA/VWAP should have same hard stop');
     });
   });
 });

@@ -20,7 +20,8 @@ export function getOrbMaxPositions(environment) {
 
 /** Profit target and stop loss (fraction of premium). Independently tunable. */
 export const ORB_PROFIT_PCT = 0.175;
-export const ORB_STOP_LOSS_PCT = 0.10;
+export const ORB_STOP_LOSS_PCT = 0.01;  // 1% soft stop
+export const ORB_HARD_STOP_PCT = 0.0175; // 1.75% hard stop (poll-based trigger)
 
 /**
  * Minimum option entry premium to open a position. null = disabled (set before go-live).

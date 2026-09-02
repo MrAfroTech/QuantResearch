@@ -20,7 +20,8 @@ export function getPremarketMaxPositions(environment) {
 
 /** Profit target and stop loss (fraction of premium). Independently tunable from ORB. */
 export const PREMARKET_PROFIT_PCT = 0.175;
-export const PREMARKET_STOP_LOSS_PCT = 0.10;
+export const PREMARKET_STOP_LOSS_PCT = 0.01;     // 1% soft stop
+export const PREMARKET_HARD_STOP_TRIGGER = 0.0175; // 1.75% hard stop (poll-based trigger)
 
 /**
  * Minimum option entry premium (ask / entry quote) to open a position.
