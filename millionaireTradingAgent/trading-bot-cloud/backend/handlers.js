@@ -815,3 +815,80 @@ export async function switchStrategyEnvironment(input, strategyArg = 'swing') {
     emavwap_environment: environments.emavwap,
   };
 }
+
+export async function getBreakoutEventLog(limit = 100) {
+  const sql = getSql();
+
+  const orbEvents = await sql`
+    SELECT 
+      'orb' as strategy,
+      ticker,
+      trade_date,
+      event_type,
+      direction,
+      breakout_level,
+      details_json,
+      created_at
+    FROM orb_event_log
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `.catch(() => []);
+
+  const premarketEvents = await sql`
+    SELECT 
+      'premarket' as strategy,
+      ticker,
+      trade_date,
+      event_type,
+      direction,
+      breakout_level,
+      details_json,
+      created_at
+    FROM premarket_event_log
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `.catch(() => []);
+
+  const emaVwapEvents = await sql`
+    SELECT 
+      'emavwap' as strategy,
+      ticker,
+      trade_date,
+      event_type,
+      direction,
+      breakout_level,
+      details_json,
+      created_at
+    FROM emavwap_event_log
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `.catch(() => []);
+
+  const allEvents = [...orbEvents, ...premarketEvents, ...emaVwapEvents]
+    .map((row) => {
+      let detailsObj = {};
+      try {
+        detailsObj = typeof row.details_json === 'string' 
+          ? JSON.parse(row.details_json) 
+          : row.details_json || {};
+      } catch {
+        detailsObj = {};
+      }
+
+      return {
+        strategy: row.strategy,
+        ticker: row.ticker,
+        trade_date: row.trade_date,
+        event_type: row.event_type,
+        direction: row.direction,
+        breakout_level: row.breakout_level,
+        entry_policy: detailsObj.entry_policy || null,
+        details: detailsObj,
+        created_at: row.created_at,
+      };
+    })
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .slice(0, limit);
+
+  return allEvents;
+}

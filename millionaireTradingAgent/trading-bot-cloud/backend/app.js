@@ -3,6 +3,7 @@ import cors from 'cors';
 import {
   buildStatusResponse,
   switchExecutionMode,
+  getBreakoutEventLog,
 } from './handlers.js';
 import {
   getEtradeAuthUrl,
@@ -191,6 +192,17 @@ app.post('/api/budget/expired-sweep', async (req, res) => {
   try {
     const result = await runExpiredPositionSweep();
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/event-log', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    res.setHeader('Cache-Control', 'no-store');
+    const events = await getBreakoutEventLog(limit);
+    res.json({ events, count: events.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

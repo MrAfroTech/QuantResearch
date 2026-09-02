@@ -83,6 +83,19 @@ export async function ensureEmaVwapSchema() {
       )
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS emavwap_event_log (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        ticker TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        direction TEXT,
+        breakout_level DOUBLE PRECISION,
+        details_json TEXT,
+        created_at TEXT NOT NULL
+      )
+    `;
+
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS exit_phase TEXT DEFAULT 'INITIAL'`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS contracts_open INTEGER`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS trail_peak_pnl_frac DOUBLE PRECISION NOT NULL DEFAULT 0`;
@@ -407,4 +420,21 @@ export async function hasEmaVwapCrossExecutedToday({
     LIMIT 1
   `;
   return Boolean(logRow);
+}
+
+export async function logEmaVwapEvent({ ticker, tradeDate, eventType, direction, breakoutLevel, details }) {
+  await ensureEmaVwapSchema();
+  const sql = getSql();
+  await sql`
+    INSERT INTO emavwap_event_log (ticker, trade_date, event_type, direction, breakout_level, details_json, created_at)
+    VALUES (
+      ${ticker},
+      ${tradeDate},
+      ${eventType},
+      ${direction || null},
+      ${breakoutLevel ?? null},
+      ${JSON.stringify(details ?? {})},
+      NOW()::text
+    )
+  `;
 }
