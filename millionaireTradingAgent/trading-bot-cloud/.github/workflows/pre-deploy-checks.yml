@@ -1,0 +1,88 @@
+name: Pre-Deploy Checks
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - production
+  workflow_dispatch:
+
+jobs:
+  stop-loss-tests:
+    name: Critical Stop-Loss Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Run Stop-Loss Tests (CI Mode)
+        id: tests
+        run: |
+          echo "Running stop-loss protection test suite..."
+          npm run test:ci 2>&1 | tee test-output.log
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          echo "test_exit_code=$TEST_EXIT_CODE" >> $GITHUB_OUTPUT
+          exit $TEST_EXIT_CODE
+          
+      - name: Report test results
+        if: always()
+        run: |
+          if [ "${{ steps.tests.outputs.test_exit_code }}" = "0" ]; then
+            echo "✅ All stop-loss tests passed"
+            echo "✅ Configuration verified"
+            echo "✅ Regression tests passed"
+            echo "✅ Cross-strategy isolation confirmed"
+            echo ""
+            echo "Safe to deploy to production"
+          else
+            echo "❌ STOP-LOSS TESTS FAILED"
+            echo ""
+            echo "CRITICAL: Stop-loss protection may be compromised"
+            echo "Three strategies (ORB, Premarket, EMA/VWAP) trade LIVE capital"
+            echo ""
+            echo "DO NOT DEPLOY until all tests pass"
+            echo ""
+            echo "Review test output above for details"
+            exit 1
+          fi
+          
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stop-loss-test-results
+          path: |
+            test-output.log
+            tests/**/*.test.js
+          retention-days: 90
+          
+  deploy-gate:
+    name: Deployment Gate
+    runs-on: ubuntu-latest
+    needs: stop-loss-tests
+    if: always()
+    
+    steps:
+      - name: Check if safe to deploy
+        run: |
+          if [ "${{ needs.stop-loss-tests.result }}" = "success" ]; then
+            echo "✅ Stop-loss tests passed - deployment approved"
+            echo "deployment_approved=true" >> $GITHUB_ENV
+          else
+            echo "❌ Stop-loss tests failed - deployment BLOCKED"
+            echo ""
+            echo "This is a safety gate protecting live trading capital"
+            echo "Review and fix test failures before deploying"
+            exit 1
+          fi

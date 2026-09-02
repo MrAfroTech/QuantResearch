@@ -11,7 +11,11 @@
     "build:vercel": "vite build",
     "dev:frontend": "vite --port 5173",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
-    "register:telegram-webhook": "node scripts/register-telegram-webhook.js"
+    "register:telegram-webhook": "node scripts/register-telegram-webhook.js",
+    "test": "node --test tests/**/*.test.js",
+    "test:watch": "node --test --watch tests/**/*.test.js",
+    "test:stop-loss": "node --test tests/stop-loss/**/*.test.js",
+    "test:ci": "node --test --test-reporter=spec tests/**/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
