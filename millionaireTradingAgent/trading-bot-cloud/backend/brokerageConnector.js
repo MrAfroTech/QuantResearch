@@ -840,7 +840,7 @@ function findStrikeEntry(expirationEntry, targetStrike, direction) {
   return best;
 }
 
-async function tastytradeGetOptionChain(ticker, direction, spotPrice) {
+async function tastytradeGetOptionChain(ticker, direction, spotPrice, targetExpiration = null) {
   const price = spotPrice ?? (await fetchQuote(ticker)).price;
   const step = getStrikeStep(ticker);
   const atm = Math.round(price / step) * step;
@@ -848,8 +848,25 @@ async function tastytradeGetOptionChain(ticker, direction, spotPrice) {
 
   const chainJson = await tastytradeFetchNestedChain(ticker);
   const expirations = extractExpirations(chainJson);
-  const expirationEntry = pickExpirationEntry(expirations);
-  if (!expirationEntry) throw new Error(`No Tastytrade expiration with DTE >= 21 for ${ticker}`);
+
+  // When targetExpiration is provided (0DTE fallback), search for that exact date.
+  // Otherwise, use the original Swing-compatible 21+ DTE minimum logic.
+  let expirationEntry = null;
+  if (targetExpiration) {
+    const normalizedTarget = normalizeExpirationDate(targetExpiration);
+    expirationEntry = expirations
+      .map((exp) => ({
+        exp,
+        expiration: normalizeExpirationDate(exp['expiration-date'] || exp.expiration_date || exp.expiration),
+      }))
+      .find((entry) => entry.expiration === normalizedTarget);
+    if (!expirationEntry) {
+      throw new Error(`No Tastytrade expiration found for target date ${normalizedTarget} on ${ticker}`);
+    }
+  } else {
+    expirationEntry = pickExpirationEntry(expirations);
+    if (!expirationEntry) throw new Error(`No Tastytrade expiration with DTE >= 21 for ${ticker}`);
+  }
 
   const strikeMatch = findStrikeEntry(expirationEntry, targetStrike, direction);
   if (!strikeMatch?.optionSymbol) {
@@ -1260,7 +1277,14 @@ export async function placeOptionOrder({
   if (!option?.optionSymbol) {
     try {
       const quote = await fetchQuote(ticker);
-      option = await tastytradeGetOptionChain(ticker, direction, quote.price);
+      // 0DTE strategies (orb/premarket/emavwap) pass exact expiration — search for that date.
+      // Swing/others may not pass expiration or pass monthly — fallback uses minDte=21 logic.
+      if (expiration) {
+        console.log(
+          `[brokerageConnector][${strategy}] Exact lookup missed; searching chain for target expiration ${expiration}`
+        );
+      }
+      option = await tastytradeGetOptionChain(ticker, direction, quote.price, expiration);
     } catch (err) {
       console.warn(`[brokerageConnector] Chain lookup failed for order:`, err.message);
     }
