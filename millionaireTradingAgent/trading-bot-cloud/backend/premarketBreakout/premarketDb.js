@@ -1,6 +1,7 @@
 import { getSql } from '../sqlClient.js';
 import { ladderExitPhase } from '../ladder/ladderConfig.js';
 import { computeRealizedPnlDollars } from '../tradePnl.js';
+import { readStrategyEnvironmentForLog } from '../tradeLogEnvironment.js';
 
 const BOT_SYMBOL = '';
 const BOT_DATE = '';
@@ -109,9 +110,14 @@ export async function ensurePremarketSchema() {
     await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
     await sql`ALTER TABLE premarket_trade_log ADD COLUMN IF NOT EXISTS entry_contracts INTEGER`;
     await sql`ALTER TABLE premarket_trade_log ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
+    // live|paper at insert time. NULL = pre-deploy unknown. No backfill.
+    await sql`ALTER TABLE premarket_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
     await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS broker_stop_order_id TEXT`;
     await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS broker_stop_trigger_price DOUBLE PRECISION`;
     await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS broker_stop_pnl_frac DOUBLE PRECISION`;
+    await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS pending_close_order_id TEXT`;
+    await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS pending_close_reason TEXT`;
+    await sql`ALTER TABLE premarket_positions ADD COLUMN IF NOT EXISTS pending_close_submitted_at TEXT`;
 
     const month = new Date().toISOString().slice(0, 7);
     const existing = await sql`
@@ -322,6 +328,19 @@ export async function updatePremarketPositionBrokerStop(id, state) {
   `;
 }
 
+export async function updatePremarketPositionPendingClose(id, state) {
+  await ensurePremarketSchema();
+  const sql = getSql();
+  await sql`
+    UPDATE premarket_positions
+    SET
+      pending_close_order_id = ${state.pending_close_order_id ?? null},
+      pending_close_reason = ${state.pending_close_reason ?? null},
+      pending_close_submitted_at = ${state.pending_close_submitted_at ?? null}
+    WHERE id = ${id}
+  `;
+}
+
 async function insertPremarketTradeLogLeg(tx, position, exitPremium, pnlPct, reason, legQty) {
   const realizedPnl = computeRealizedPnlDollars({
     entryPremium: position.entry_premium,
@@ -330,12 +349,14 @@ async function insertPremarketTradeLogLeg(tx, position, exitPremium, pnlPct, rea
     closeReason: reason,
   });
 
+  const environment = await readStrategyEnvironmentForLog('premarket', tx);
   await tx`
     INSERT INTO premarket_trade_log (
       ticker, direction, strike, expiration, entry_premium, exit_premium, quantity,
       pnl_pct, realized_pnl, premarket_high, premarket_low, breakout_level,
       breakout_direction, confirmation_candles_json, strike_bucket, entry_iv, entry_delta,
-      mfe_pct, mae_pct, close_reason, opened_at, closed_at, entry_contracts, pyramid_tier
+      mfe_pct, mae_pct, close_reason, opened_at, closed_at, entry_contracts, pyramid_tier,
+      environment
     )
     VALUES (
       ${position.ticker},
@@ -361,7 +382,8 @@ async function insertPremarketTradeLogLeg(tx, position, exitPremium, pnlPct, rea
       ${position.opened_at},
       NOW()::text,
       ${position.entry_contracts ?? position.quantity},
-      ${position.pyramid_tier ?? null}
+      ${position.pyramid_tier ?? null},
+      ${environment}
     )
   `;
 }
@@ -395,12 +417,20 @@ export async function partialClosePremarketPosition(id, exitPremium, pnlPct, rea
   return position;
 }
 
+/** True when UPDATE … AND status = 'OPEN' claimed the row. */
+export function premarketCloseUpdateClaimed(updated) {
+  const count = Number(updated?.count);
+  if (Number.isFinite(count)) return count > 0;
+  return Array.isArray(updated) && updated.length > 0;
+}
+
 export async function closePremarketPosition(id, exitPremium, pnlPct, reason, closeQty = null) {
   await ensurePremarketSchema();
   const sql = getSql();
   const posRows = await sql`SELECT * FROM premarket_positions WHERE id = ${id}`;
   const position = rowToObject(posRows[0]);
   if (!position) return null;
+  if (String(position.status || '').toUpperCase() === 'CLOSED') return null;
 
   const legQty = closeQty ?? position.quantity;
   const exitFrac = Number(pnlPct) / 100;
@@ -409,12 +439,20 @@ export async function closePremarketPosition(id, exitPremium, pnlPct, reason, cl
   position.mfe_pct = mfePct;
   position.mae_pct = maePct;
 
+  let claimed = false;
   await sql.begin(async (tx) => {
-    await tx`UPDATE premarket_positions SET status = 'CLOSED' WHERE id = ${id}`;
+    const updated = await tx`
+      UPDATE premarket_positions
+      SET status = 'CLOSED'
+      WHERE id = ${id} AND status = 'OPEN'
+      RETURNING id
+    `;
+    if (!premarketCloseUpdateClaimed(updated)) return;
     await insertPremarketTradeLogLeg(tx, position, exitPremium, pnlPct, reason, legQty);
+    claimed = true;
   });
 
-  return position;
+  return claimed ? position : null;
 }
 
 export async function logPremarketEvent({ ticker, tradeDate, eventType, direction, breakoutLevel, details }) {
@@ -434,7 +472,7 @@ export async function logPremarketEvent({ ticker, tradeDate, eventType, directio
   `;
 }
 
-/** True if any position or trade log row exists for this breakout key today. */
+/** True only while a filled position for this breakout key is still OPEN. */
 export async function hasPremarketBreakoutExecutedToday({
   ticker,
   direction,
@@ -451,17 +489,28 @@ export async function hasPremarketBreakoutExecutedToday({
       AND direction = ${direction}
       AND breakout_level = ${level}
       AND expiration = ${tradeDate}
+      AND status = 'OPEN'
     LIMIT 1
   `;
-  if (posRow) return true;
+  return Boolean(posRow);
+}
 
-  const [logRow] = await sql`
-    SELECT 1 FROM premarket_trade_log
+export async function listPremarketBreakoutCloseOutcomes({ ticker, tradeDate }) {
+  await ensurePremarketSchema();
+  const sql = getSql();
+  const rows = await sql`
+    SELECT direction, breakout_level, opened_at, closed_at, realized_pnl
+    FROM premarket_trade_log
     WHERE ticker = ${ticker}
-      AND direction = ${direction}
-      AND breakout_level = ${level}
       AND expiration = ${tradeDate}
-    LIMIT 1
+      AND COALESCE(close_reason, '') NOT IN ('entry_unfilled_cancelled', 'entry_never_filled')
+    ORDER BY closed_at ASC
   `;
-  return Boolean(logRow);
+  return rows.map((row) => ({
+    direction: row.direction,
+    breakout_level: row.breakout_level,
+    opened_at: row.opened_at,
+    closed_at: row.closed_at,
+    realized_pnl: row.realized_pnl,
+  }));
 }

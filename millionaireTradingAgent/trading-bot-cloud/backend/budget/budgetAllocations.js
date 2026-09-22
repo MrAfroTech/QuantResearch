@@ -7,8 +7,17 @@ import { ORB_BUDGET_MAX } from '../orb/orbConfig.js';
 import { PREMARKET_BUDGET_MAX } from '../premarketBreakout/premarketConfig.js';
 import { EMA_VWAP_BUDGET_MAX } from '../emaVwapCross/emaVwapConfig.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
-import { getLiveBudgetTotal, getLiveBudgetCacheMeta } from './liveBudget.js';
+import {
+  getLiveBudgetTotal,
+  getLiveBudgetCacheMeta,
+  getLiveStrategyKeys,
+  resolveLiveSizingBudget,
+  LIVE_PER_TRADE_CAP_FRAC,
+  livePerTradeCapFracFor,
+} from './liveBudget.js';
 import { refreshLiveRiskState } from './liveRiskSync.js';
+
+export { LIVE_PER_TRADE_CAP_FRAC, livePerTradeCapFracFor };
 
 /** Weekly top-off / base allocation for swing (16.67% of $1,797 weekly pool). */
 export const SWING_WEEKLY_TOP_OFF = 299.5;
@@ -205,10 +214,55 @@ async function getStrategySpent(strategy) {
   return 0;
 }
 
-export async function getSwingBudgetRemaining() {
-  const total = await getTotalAllocated('swing');
-  const spent = await getStrategySpent('swing');
+/**
+ * Live-path only: shared cash − Σ(deployed across all live strategies), then
+ * provisional per-trade cap. Paper callers must not use this.
+ */
+export async function getLiveSizingBudgetRemaining(strategy) {
+  const liveStrategies = await getLiveStrategyKeys();
+  if (!liveStrategies.includes(strategy)) {
+    return 0;
+  }
+  if (!getLiveBudgetCacheMeta().updatedAt) {
+    await refreshLiveRiskState();
+  }
+
+  const cash = Number(getLiveBudgetCacheMeta().cashBalance) || 0;
+  const deployedByStrategy = {};
+  for (const key of liveStrategies) {
+    deployedByStrategy[key] = await getStrategySpent(key);
+  }
+
+  return resolveLiveSizingBudget({
+    cashBalance: cash,
+    deployedByStrategy,
+    liveStrategies,
+    requestingStrategy: strategy,
+    perTradeCapFrac: livePerTradeCapFracFor(strategy),
+  });
+}
+
+async function getPaperBudgetRemaining(strategy) {
+  // Paper path only — reads budget_allocations directly (never live shared pool).
+  await ensureBudgetAllocationsSchema();
+  const sql = getSql();
+  const rows = await sql`
+    SELECT total_allocated FROM budget_allocations WHERE strategy = ${strategy}
+  `;
+  const total =
+    rows.length === 0
+      ? (STRATEGY_CONFIG[strategy]?.initial ?? 0)
+      : Number(rows[0].total_allocated);
+  const spent = await getStrategySpent(strategy);
   return Math.max(0, total - spent);
+}
+
+export async function getSwingBudgetRemaining() {
+  const environment = await getStrategyEnvironment('swing');
+  if (environment === 'live') {
+    return getLiveSizingBudgetRemaining('swing');
+  }
+  return getPaperBudgetRemaining('swing');
 }
 
 export async function getSwingTotalAllocated() {
@@ -216,21 +270,27 @@ export async function getSwingTotalAllocated() {
 }
 
 export async function getOrbBudgetRemaining() {
-  const total = await getTotalAllocated('orb');
-  const spent = await getStrategySpent('orb');
-  return Math.max(0, total - spent);
+  const environment = await getStrategyEnvironment('orb');
+  if (environment === 'live') {
+    return getLiveSizingBudgetRemaining('orb');
+  }
+  return getPaperBudgetRemaining('orb');
 }
 
 export async function getPremarketBudgetRemaining() {
-  const total = await getTotalAllocated('premarket');
-  const spent = await getStrategySpent('premarket');
-  return Math.max(0, total - spent);
+  const environment = await getStrategyEnvironment('premarket');
+  if (environment === 'live') {
+    return getLiveSizingBudgetRemaining('premarket');
+  }
+  return getPaperBudgetRemaining('premarket');
 }
 
 export async function getEmaVwapBudgetRemaining() {
-  const total = await getTotalAllocated('emavwap');
-  const spent = await getStrategySpent('emavwap');
-  return Math.max(0, total - spent);
+  const environment = await getStrategyEnvironment('emavwap');
+  if (environment === 'live') {
+    return getLiveSizingBudgetRemaining('emavwap');
+  }
+  return getPaperBudgetRemaining('emavwap');
 }
 
 const STRATEGY_LABELS = {
@@ -242,11 +302,38 @@ const STRATEGY_LABELS = {
 
 export async function getStrategyBudgetSnapshot(strategy) {
   const environment = await getStrategyEnvironment(strategy);
-  const total = await getTotalAllocated(strategy);
-  const spent = await getStrategySpent(strategy);
   const weeklyTopOff = environment === 'live' ? null : (STRATEGY_CONFIG[strategy]?.weekly_top_off ?? 0);
   const liveMeta = environment === 'live' ? getLiveBudgetCacheMeta() : null;
 
+  if (environment === 'live') {
+    const liveStrategies = await getLiveStrategyKeys();
+    const deployedByStrategy = {};
+    let spentAcrossLive = 0;
+    for (const key of liveStrategies) {
+      const spent = await getStrategySpent(key);
+      deployedByStrategy[key] = spent;
+      spentAcrossLive += spent;
+    }
+    const total = await getTotalAllocated(strategy);
+    const remaining = await getLiveSizingBudgetRemaining(strategy);
+    return {
+      strategy,
+      label: STRATEGY_LABELS[strategy] || strategy,
+      total_allocated: total,
+      max: total,
+      spent: spentAcrossLive,
+      remaining,
+      weekly_top_off: weeklyTopOff,
+      budget_mode: environment,
+      live_account_cash: liveMeta?.cashBalance ?? null,
+      live_strategies_count: liveMeta?.liveCount ?? null,
+      live_per_trade_cap_frac: livePerTradeCapFracFor(strategy),
+      live_deployed_by_strategy: deployedByStrategy,
+    };
+  }
+
+  const total = await getTotalAllocated(strategy);
+  const spent = await getStrategySpent(strategy);
   return {
     strategy,
     label: STRATEGY_LABELS[strategy] || strategy,
@@ -256,8 +343,8 @@ export async function getStrategyBudgetSnapshot(strategy) {
     remaining: Math.max(0, total - spent),
     weekly_top_off: weeklyTopOff,
     budget_mode: environment,
-    live_account_cash: liveMeta?.cashBalance ?? null,
-    live_strategies_count: liveMeta?.liveCount ?? null,
+    live_account_cash: null,
+    live_strategies_count: null,
   };
 }
 

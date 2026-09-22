@@ -95,6 +95,7 @@ async function initSchema() {
   await sql`ALTER TABLE positions ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
   await sql`ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS entry_contracts INTEGER`;
   await sql`ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
+  await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS entries_halted_until TIMESTAMPTZ`;
 
   const currentMonth = new Date().toISOString().slice(0, 7);
   const existing = await sql`SELECT id FROM bot_state WHERE id = 1`;

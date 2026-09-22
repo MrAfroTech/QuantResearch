@@ -95,6 +95,37 @@ export async function setStrategyEnvironment(strategy, environment) {
   return env;
 }
 
+/** Railway production environment only — staging stays paper-executable and unfiltered. */
+export function isProductionRuntime() {
+  const envName = String(
+    process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || ''
+  ).toLowerCase();
+  return envName === 'production';
+}
+
+/** Close/exit alerts for already-open positions must still fire in paper mode. */
+export function isCloseOrExitAlertType(alertType) {
+  const t = String(alertType || '').toLowerCase();
+  return (
+    t.includes('trade_closed') ||
+    t.includes('close_order') ||
+    t.includes('unprotected_broker_stop') ||
+    t.includes('oto_stop_align') ||
+    t.includes('partial_fill')
+  );
+}
+
+/**
+ * Production: suppress non-exit Telegram for any currently-paper strategy.
+ * Staging: never suppress. Live strategies: never suppress.
+ */
+export async function shouldSuppressNonExitTelegram(strategy) {
+  if (!isProductionRuntime()) return false;
+  if (!strategy) return false;
+  const env = await getStrategyEnvironment(strategy);
+  return env !== 'live';
+}
+
 export async function getAllStrategyEnvironments() {
   const strategies = ['swing', 'orb', 'premarket', 'emavwap'];
   const environments = {};

@@ -10,8 +10,43 @@ import {
   optionPriceIncrement,
   underlyingFromOptionSymbol,
 } from './optionPriceIncrement.js';
+import { computeTradableCashBalance } from './budget/tradableCash.js';
+import { isLadderBrokerStopEnabledForStrategy } from './ladder/ladderConfig.js';
+import {
+  buildOtoEntryStopBody,
+  parsePlacedComplexOrder,
+  otoFallbackReason,
+} from './ladder/otoEntryStop.js';
+import {
+  bookedEntryQuantity,
+  entryHasBrokerLong,
+  fillPollShouldReturn,
+  hasConfirmedFillPrice,
+  isBrokerOrderGoneError,
+  isCancelConfirmed,
+  isConfirmedCancelledStatus,
+  isConfirmedRestingStop,
+  normalizeOrderStatus,
+  stopQuantityFromStatus,
+} from './ladder/orderFillStatus.js';
+import {
+  fillBasedStopParams,
+  finalizeOtoPartialFill,
+  restingStopIdAfterAlign,
+} from './ladder/otoStopQuantity.js';
+import {
+  brokerQtyForOcc,
+  latestSellToCloseFromTransactions,
+  occForDbPosition,
+} from './recon/positionMatch.js';
+import { etDateKey } from './orb/tradierTimesales.js';
 
 const WATCHED_TICKERS = ['VIX', 'SOFI', 'C3.AI'];
+
+/** Exact-expiration nested-chain miss in placeOptionOrder — fallback may still run. */
+export const FIND_OPTION_MISS_REASON = 'find_option_expiration_miss';
+/** Resolved OCC expiration ≠ requested expiration — entry must not be submitted. */
+export const EXPIRATION_MISMATCH_BLOCKED_REASON = 'expiration_mismatch_blocked';
 
 function toTradierSymbol(ticker) {
   if (ticker === 'C3.AI') return 'AI';
@@ -328,49 +363,15 @@ function extractOrderId(orderJson) {
   return orderId ? String(orderId) : null;
 }
 
-function normalizeOrderStatus(orderJson) {
-  const order = orderJson?.data || orderJson;
-  const status = String(
-    order?.status || order?.['order-status'] || order?.order_status || ''
-  ).toLowerCase();
-  const legs = order?.legs || order?.['order-legs'] || [];
-  const leg = Array.isArray(legs) ? legs[0] : null;
-  const fills = leg?.fills || order?.fills || [];
-  const fillList = Array.isArray(fills) ? fills : [];
 
-  let fillPrice = null;
-  let fillQuantity = 0;
-  for (const fill of fillList) {
-    const price = parseNumber(fill?.['fill-price'] ?? fill?.fill_price ?? fill?.price);
-    const qty = parseNumber(fill?.quantity ?? fill?.['fill-quantity']);
-    if (price != null) {
-      fillPrice = fillPrice == null ? price : (fillPrice + price) / 2;
-    }
-    if (qty != null) fillQuantity += qty;
-  }
-
-  if (!fillPrice) {
-    fillPrice = parseNumber(order?.['average-fill-price'] ?? order?.average_fill_price);
-  }
-
-  const terminalFilled = ['filled', 'cancelled', 'canceled', 'expired', 'rejected'].includes(status);
-  const isFilled = status === 'filled' || (fillPrice != null && fillQuantity > 0);
-
-  return {
-    status,
-    isFilled,
-    isTerminal: terminalFilled || isFilled,
-    fillPrice,
-    fillQuantity: fillQuantity || parseNumber(order?.quantity),
-    raw: order,
-  };
-}
-
-async function tastytradeSubmitStopOrderWithCredentials(
-  credentials,
-  sessionRef,
-  { accountNumber, optionSymbol, quantity, stopTrigger, limitPrice, orderType, dryRun = false }
-) {
+function buildStopOrderBody({
+  optionSymbol,
+  quantity,
+  stopTrigger,
+  limitPrice,
+  orderType,
+  includeLegs = true,
+}) {
   const isStopLimit = orderType === 'stop_limit';
   const underlying = underlyingFromOptionSymbol(optionSymbol);
   const roundedTrigger = formatOptionPriceForApi(stopTrigger, { underlying });
@@ -379,18 +380,24 @@ async function tastytradeSubmitStopOrderWithCredentials(
   }
   const body = {
     'order-type': isStopLimit ? 'Stop Limit' : 'Stop',
-    'time-in-force': 'GTC',
+    // Stop Market equity options reject GTC/GTD on Tastytrade
+    // (preflight tif_no_stop_market_gtc_options). Day is the valid TIF.
+    // Stop Limit keeps GTC (not covered by that rejection code).
+    'time-in-force': isStopLimit ? 'GTC' : 'Day',
     'stop-trigger': roundedTrigger,
     'price-effect': 'Credit',
-    legs: [
+  };
+
+  if (includeLegs) {
+    body.legs = [
       {
         'instrument-type': 'Equity Option',
         symbol: optionSymbol,
         quantity,
         action: 'Sell to Close',
       },
-    ],
-  };
+    ];
+  }
 
   if (isStopLimit) {
     const rawLimit = limitPrice ?? stopTrigger;
@@ -400,6 +407,23 @@ async function tastytradeSubmitStopOrderWithCredentials(
     }
     body.price = roundedLimit;
   }
+
+  return body;
+}
+
+async function tastytradeSubmitStopOrderWithCredentials(
+  credentials,
+  sessionRef,
+  { accountNumber, optionSymbol, quantity, stopTrigger, limitPrice, orderType, dryRun = false }
+) {
+  const body = buildStopOrderBody({
+    optionSymbol,
+    quantity,
+    stopTrigger,
+    limitPrice,
+    orderType,
+    includeLegs: true,
+  });
 
   const path = dryRun
     ? `/accounts/${accountNumber}/orders/dry-run`
@@ -423,14 +447,170 @@ async function tastytradeSubmitStopOrderWithCredentials(
   return { orderId, body };
 }
 
-async function tastytradeCancelOrderWithCredentials(credentials, sessionRef, accountNumber, orderId) {
-  await tastytradeRequestWithCredentials(
+/**
+ * Atomic live-order replace (Tastytrade PUT /accounts/{id}/orders/{orderId}).
+ * Official tastyware SDK exclude={"legs"} — same contract, new trigger.
+ * A fill on the original order aborts the replacement.
+ */
+async function tastytradeReplaceStopOrderWithCredentials(
+  credentials,
+  sessionRef,
+  { accountNumber, existingOrderId, optionSymbol, quantity, stopTrigger, limitPrice, orderType }
+) {
+  if (!existingOrderId) throw new Error('replace stop requires existingOrderId');
+  const body = buildStopOrderBody({
+    optionSymbol,
+    quantity,
+    stopTrigger,
+    limitPrice,
+    orderType,
+    includeLegs: false,
+  });
+  const json = await tastytradeRequestWithCredentials(
     credentials,
     sessionRef,
-    `/accounts/${accountNumber}/orders/${orderId}`,
-    { method: 'DELETE' }
+    `/accounts/${accountNumber}/orders/${existingOrderId}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }
   );
-  return { cancelled: true, orderId };
+  const orderId = extractOrderId(json) || String(existingOrderId);
+  return {
+    orderId,
+    replacesOrderId: String(existingOrderId),
+    body,
+    raw: json,
+  };
+}
+
+async function tastytradeSubmitOtoEntryStopWithCredentials(
+  credentials,
+  sessionRef,
+  {
+    accountNumber,
+    optionSymbol,
+    quantity,
+    entryPrice,
+    stopTrigger,
+    stopLimitPrice,
+    stopOrderType,
+    dryRun = false,
+  }
+) {
+  const underlying = underlyingFromOptionSymbol(optionSymbol);
+  const roundedEntry = formatOptionPriceForApi(entryPrice, { underlying });
+  const roundedTrigger = formatOptionPriceForApi(stopTrigger, { underlying });
+  if (roundedEntry == null) throw new Error(`Invalid OTO entry price after rounding: ${entryPrice}`);
+  if (roundedTrigger == null) throw new Error(`Invalid OTO stop trigger after rounding: ${stopTrigger}`);
+
+  let roundedStopLimit = stopLimitPrice;
+  if (stopLimitPrice != null) {
+    roundedStopLimit = formatOptionPriceForApi(stopLimitPrice, { underlying });
+  }
+
+  const body = buildOtoEntryStopBody({
+    optionSymbol,
+    quantity,
+    entryPrice: roundedEntry,
+    stopTrigger: roundedTrigger,
+    stopOrderType,
+    stopLimitPrice: roundedStopLimit,
+  });
+
+  const path = dryRun
+    ? `/accounts/${accountNumber}/complex-orders/dry-run`
+    : `/accounts/${accountNumber}/complex-orders`;
+  const json = await tastytradeRequestWithCredentials(
+    credentials,
+    sessionRef,
+    path,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (dryRun) {
+    return { dryRun: true, valid: true, body, response: json, parsed: parsePlacedComplexOrder(json) };
+  }
+
+  const parsed = parsePlacedComplexOrder(json);
+  if (!parsed.triggerOrderId) {
+    throw new Error('Tastytrade OTO submitted but no trigger order ID returned');
+  }
+  if (!parsed.stopOrderId) {
+    throw new Error('Tastytrade OTO submitted but no stop child order ID returned');
+  }
+  return { ...parsed, body };
+}
+
+async function waitForBrokerOrderCancelled(credentials, sessionRef, accountNumber, orderId, {
+  timeoutMs = 8_000,
+  pollMs = 400,
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    try {
+      last = await tastytradeGetOrderStatusWithCredentials(
+        credentials,
+        sessionRef,
+        accountNumber,
+        orderId
+      );
+      if (isConfirmedCancelledStatus(last) || last?.isFilled || last?.isTerminal) {
+        return last;
+      }
+    } catch (err) {
+      if (isBrokerOrderGoneError(err)) {
+        return { status: 'cancelled', isTerminal: true, isFilled: false, gone: true };
+      }
+      throw err;
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return last;
+}
+
+async function tastytradeCancelOrderWithCredentials(credentials, sessionRef, accountNumber, orderId) {
+  try {
+    await tastytradeRequestWithCredentials(
+      credentials,
+      sessionRef,
+      `/accounts/${accountNumber}/orders/${orderId}`,
+      { method: 'DELETE' }
+    );
+  } catch (err) {
+    if (isBrokerOrderGoneError(err)) {
+      return { cancelled: true, orderId, gone: true, status: 'cancelled' };
+    }
+    throw err;
+  }
+
+  let status = null;
+  try {
+    status = await waitForBrokerOrderCancelled(credentials, sessionRef, accountNumber, orderId);
+  } catch (err) {
+    if (isBrokerOrderGoneError(err)) {
+      return { cancelled: true, orderId, gone: true, status: 'cancelled' };
+    }
+    console.warn(`[brokerageConnector] Cancel confirm GET failed for ${orderId}:`, err.message);
+    return { cancelled: false, orderId, reason: 'cancel_confirm_failed', error: err.message };
+  }
+
+  if (status?.gone || isConfirmedCancelledStatus(status)) {
+    return { cancelled: true, orderId, status: status.status, gone: Boolean(status.gone) };
+  }
+  if (status?.isFilled) {
+    return { cancelled: false, orderId, reason: 'filled', filled: true, status: status.status };
+  }
+  return {
+    cancelled: false,
+    orderId,
+    reason: 'cancel_unconfirmed',
+    status: status?.status || 'unknown',
+  };
 }
 
 async function tastytradeGetOrderStatusWithCredentials(credentials, sessionRef, accountNumber, orderId) {
@@ -589,9 +769,21 @@ async function cancelConflictingLiveOrdersWithCredentials(
         accountNumber,
         orderId
       );
-      if (isWorkingOrderStatus(status.status) && !status.isFilled) {
-        await tastytradeCancelOrderWithCredentials(credentials, sessionRef, accountNumber, orderId);
-        cancelled.push({ orderId, reason: 'entry_or_known_id', status: status.status });
+      if (isWorkingOrderStatus(status.status) && !entryHasBrokerLong(status) && !status.isFilled) {
+        const cancelResult = await tastytradeCancelOrderWithCredentials(
+          credentials,
+          sessionRef,
+          accountNumber,
+          orderId
+        );
+        if (isCancelConfirmed(cancelResult)) {
+          cancelled.push({ orderId, reason: 'entry_or_known_id', status: status.status });
+        } else {
+          console.warn(
+            `[brokerageConnector] Conflict cancel ${orderId} not confirmed ` +
+              `reason=${cancelResult?.reason || 'n/a'}`
+          );
+        }
       }
     } catch (err) {
       console.warn(`[brokerageConnector] Cancel known order ${orderId} failed:`, err.message);
@@ -616,8 +808,20 @@ async function cancelConflictingLiveOrdersWithCredentials(
     if (norm !== target && norm.replace(/\s/g, '') !== target.replace(/\s/g, '')) continue;
     if (!isWorkingOrderStatus(order?.status)) continue;
     try {
-      await tastytradeCancelOrderWithCredentials(credentials, sessionRef, accountNumber, id);
-      cancelled.push({ orderId: id, reason: 'live_same_symbol', status: order.status, symbol: sym });
+      const cancelResult = await tastytradeCancelOrderWithCredentials(
+        credentials,
+        sessionRef,
+        accountNumber,
+        id
+      );
+      if (isCancelConfirmed(cancelResult)) {
+        cancelled.push({ orderId: id, reason: 'live_same_symbol', status: order.status, symbol: sym });
+      } else {
+        console.warn(
+          `[brokerageConnector] Cancel live order ${id} not confirmed ` +
+            `reason=${cancelResult?.reason || 'n/a'}`
+        );
+      }
     } catch (err) {
       console.warn(`[brokerageConnector] Cancel live order ${id} failed:`, err.message);
     }
@@ -666,6 +870,66 @@ function computeDte(expirationDate) {
 function normalizeExpirationDate(value) {
   if (!value) return null;
   return String(value).slice(0, 10);
+}
+
+/**
+ * OCC / Tastytrade option symbol → YYYY-MM-DD.
+ * Accepts space-padded OCC (`IWM   260925P00291000`) and streamer (`.IWM260925P291`).
+ */
+export function expirationFromOccSymbol(optionSymbol) {
+  const compact = String(optionSymbol || '')
+    .trim()
+    .replace(/^\./, '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+  const m = compact.match(/^[A-Z]{1,6}(\d{6})[CP]/);
+  if (!m) return null;
+  const yymmdd = m[1];
+  const yy = yymmdd.slice(0, 2);
+  const mm = yymmdd.slice(2, 4);
+  const dd = yymmdd.slice(4, 6);
+  if (mm < '01' || mm > '12' || dd < '01' || dd > '31') return null;
+  return `20${yy}-${mm}-${dd}`;
+}
+
+export function describeEntryExpirationMatch(requestedExpiration, option) {
+  const requested = normalizeExpirationDate(requestedExpiration);
+  const resolved = expirationFromOccSymbol(option?.optionSymbol);
+  const mismatch = !requested || !resolved || requested !== resolved;
+  return {
+    mismatch,
+    requested_expiration: requested,
+    resolved_expiration: resolved,
+    option_symbol: option?.optionSymbol || null,
+    reason: mismatch ? EXPIRATION_MISMATCH_BLOCKED_REASON : null,
+  };
+}
+
+async function persistZeroDteEntryEvent(strategy, eventType, { ticker, direction, details }) {
+  const tradeDate = etDateKey();
+  const payload = {
+    ticker,
+    tradeDate,
+    eventType,
+    direction: direction || null,
+    breakoutLevel: null,
+    details: details ?? {},
+  };
+  try {
+    const key = String(strategy || '').toLowerCase();
+    if (key === 'orb') {
+      const { logOrbEvent } = await import('./orb/orbDb.js');
+      await logOrbEvent(payload);
+    } else if (key === 'premarket') {
+      const { logPremarketEvent } = await import('./premarketBreakout/premarketDb.js');
+      await logPremarketEvent(payload);
+    } else if (key === 'emavwap') {
+      const { logEmaVwapEvent } = await import('./emaVwapCross/emaVwapDb.js');
+      await logEmaVwapEvent(payload);
+    }
+  } catch (err) {
+    console.warn(`[brokerageConnector] persist ${eventType} failed:`, err.message);
+  }
 }
 
 function toTastytradeSymbol(ticker) {
@@ -990,6 +1254,93 @@ export async function tastytradeGetPositions() {
     }));
 }
 
+/**
+ * Option positions for a specific order environment (live vs paper), with account number.
+ * Used by THE3-2 reconciliation — never mix live/paper credentials.
+ */
+export async function tastytradeGetOptionPositions({ environment = 'live' } = {}) {
+  const orderEnvironment = normalizeOrderEnvironment(environment);
+  if (!hasCredentialsForEnvironment(orderEnvironment)) {
+    throw new Error(`[BrokerageConnector] No ${orderEnvironment} credentials for position recon`);
+  }
+  const { credentials, sessionRef } = getCredentialsForOrderEnvironment(orderEnvironment);
+  const accountNumber = await tastytradeGetAccountWithCredentials(credentials, sessionRef);
+  const json = await tastytradeRequestWithCredentials(
+    credentials,
+    sessionRef,
+    `/accounts/${accountNumber}/positions`
+  );
+  const items = json?.data?.items || [];
+  const positions = items
+    .filter((p) => {
+      const itype = String(p['instrument-type'] || p.instrument_type || '');
+      return itype.toLowerCase().includes('option');
+    })
+    .map((p) => ({
+      symbol: p.symbol,
+      quantity: parseNumber(p.quantity),
+      averageOpenPrice: parseNumber(p['average-open-price'] ?? p.average_open_price),
+      'average-open-price': parseNumber(p['average-open-price'] ?? p.average_open_price),
+      'cost-basis': parseNumber(p['cost-basis'] ?? p.cost_basis),
+      'instrument-type': p['instrument-type'] || p.instrument_type,
+    }));
+  return { accountNumber, environment: orderEnvironment, positions };
+}
+
+/**
+ * Recent trade transactions for fill reconciliation (THE3-2).
+ * GET /accounts/{id}/transactions?start-date=YYYY-MM-DD
+ */
+export async function tastytradeGetRecentTradeTransactions({
+  environment = 'live',
+  startDate,
+} = {}) {
+  const orderEnvironment = normalizeOrderEnvironment(environment);
+  if (!hasCredentialsForEnvironment(orderEnvironment)) {
+    throw new Error(`[BrokerageConnector] No ${orderEnvironment} credentials for transaction recon`);
+  }
+  const { credentials, sessionRef } = getCredentialsForOrderEnvironment(orderEnvironment);
+  const accountNumber = await tastytradeGetAccountWithCredentials(credentials, sessionRef);
+  const day = startDate || formatDate(new Date());
+  const path =
+    `/accounts/${accountNumber}/transactions?start-date=${encodeURIComponent(day)}` +
+    `&types=Trade`;
+  const json = await tastytradeRequestWithCredentials(credentials, sessionRef, path);
+  const items = json?.data?.items || [];
+  return { accountNumber, environment: orderEnvironment, transactions: items };
+}
+
+/**
+ * Live long quantity for this option at Tastytrade. null = lookup failed
+ * (retry/protect paths must keep trying, not assume flat).
+ */
+export async function getLiveOptionPositionQuantity(position, { environment } = {}) {
+  const orderEnvironment = normalizeOrderEnvironment(environment);
+  if (!hasCredentialsForEnvironment(orderEnvironment)) return null;
+  try {
+    const { positions } = await tastytradeGetOptionPositions({ environment: orderEnvironment });
+    return brokerQtyForOcc(positions, occForDbPosition(position));
+  } catch (err) {
+    console.error(`[BrokerageConnector] live option qty lookup failed:`, err.message);
+    return null;
+  }
+}
+
+export async function findLatestSellToCloseFill(position, { environment } = {}) {
+  const orderEnvironment = normalizeOrderEnvironment(environment);
+  if (!hasCredentialsForEnvironment(orderEnvironment)) return null;
+  try {
+    const { transactions } = await tastytradeGetRecentTradeTransactions({
+      environment: orderEnvironment,
+      startDate: formatDate(new Date()),
+    });
+    return latestSellToCloseFromTransactions(transactions, occForDbPosition(position));
+  } catch (err) {
+    console.warn(`[BrokerageConnector] STC fill lookup failed:`, err.message);
+    return null;
+  }
+}
+
 // --- Schwab [DISABLED] ---
 
 // import { getOAuthToken, saveOAuthToken } from './db.js';
@@ -1224,10 +1575,29 @@ async function waitForBrokerOrderFill(credentials, sessionRef, accountNumber, or
   let last = null;
   while (Date.now() < deadline) {
     last = await tastytradeGetOrderStatusWithCredentials(credentials, sessionRef, accountNumber, orderId);
-    if (last.isTerminal) return last;
+    if (fillPollShouldReturn(last)) return last;
     await new Promise((r) => setTimeout(r, pollMs));
   }
   return last;
+}
+
+async function resolveFillStatusWithPrice(credentials, sessionRef, accountNumber, orderId, fillStatus) {
+  if (hasConfirmedFillPrice(fillStatus) || !orderId) return fillStatus;
+  try {
+    const again = await tastytradeGetOrderStatusWithCredentials(
+      credentials,
+      sessionRef,
+      accountNumber,
+      orderId
+    );
+    if (hasConfirmedFillPrice(again)) return again;
+  } catch (err) {
+    console.warn(
+      `[brokerageConnector] Fill-price re-GET failed for ${orderId}:`,
+      err.message
+    );
+  }
+  return fillStatus;
 }
 
 export async function placeOptionOrder({
@@ -1240,6 +1610,7 @@ export async function placeOptionOrder({
   broker = 'tastytrade',
   environment = 'paper',
   strategy = 'unknown',
+  initialStop = null,
 }) {
   const orderEnvironment = normalizeOrderEnvironment(environment);
   const order = {
@@ -1275,6 +1646,27 @@ export async function placeOptionOrder({
   }
 
   if (!option?.optionSymbol) {
+    const requestedExpiration = normalizeExpirationDate(expiration);
+    const missDetails = {
+      reason: FIND_OPTION_MISS_REASON,
+      ticker,
+      direction,
+      strike,
+      requested_expiration: requestedExpiration,
+      fallback_attempted: true,
+      strategy,
+    };
+    console.warn(
+      `[brokerageConnector][${strategy}] ${FIND_OPTION_MISS_REASON}` +
+        ` ticker=${ticker} direction=${direction} strike=${strike}` +
+        ` requested_expiration=${requestedExpiration}` +
+        ` — fallback will be attempted`
+    );
+    await persistZeroDteEntryEvent(strategy, FIND_OPTION_MISS_REASON, {
+      ticker,
+      direction,
+      details: missDetails,
+    });
     try {
       const quote = await fetchQuote(ticker);
       // 0DTE strategies (orb/premarket/emavwap) pass exact expiration — search for that date.
@@ -1299,10 +1691,242 @@ export async function placeOptionOrder({
     console.warn(`[brokerageConnector] Using OCC fallback symbol ${option.optionSymbol}`);
   }
 
+  const expirationCheck = describeEntryExpirationMatch(expiration, option);
+  if (expirationCheck.mismatch) {
+    const blockDetails = {
+      reason: EXPIRATION_MISMATCH_BLOCKED_REASON,
+      ticker,
+      direction,
+      strike,
+      requested_expiration: expirationCheck.requested_expiration,
+      resolved_expiration: expirationCheck.resolved_expiration,
+      option_symbol: expirationCheck.option_symbol,
+      strategy,
+    };
+    console.error(
+      `[brokerageConnector][${strategy}] ${EXPIRATION_MISMATCH_BLOCKED_REASON}` +
+        ` ticker=${ticker} direction=${direction} strike=${strike}` +
+        ` requested_expiration=${expirationCheck.requested_expiration}` +
+        ` resolved_expiration=${expirationCheck.resolved_expiration}` +
+        ` occ=${expirationCheck.option_symbol}` +
+        ` — order not submitted`
+    );
+    await persistZeroDteEntryEvent(strategy, EXPIRATION_MISMATCH_BLOCKED_REASON, {
+      ticker,
+      direction,
+      details: blockDetails,
+    });
+    const err = new Error(
+      `${EXPIRATION_MISMATCH_BLOCKED_REASON} requested=${expirationCheck.requested_expiration}` +
+        ` resolved=${expirationCheck.resolved_expiration} occ=${expirationCheck.option_symbol}`
+    );
+    err.code = EXPIRATION_MISMATCH_BLOCKED_REASON;
+    err.details = blockDetails;
+    throw err;
+  }
+
   const limitPrice = option.mid ?? option.ask ?? option.bid ?? premium;
   if (limitPrice == null || !Number.isFinite(Number(limitPrice)) || Number(limitPrice) <= 0) {
     throw new Error(`No usable limit price for ${ticker} ${direction} ${strike} ${expiration}`);
   }
+
+  const wantOto =
+    isLadderBrokerStopEnabledForStrategy(strategy) &&
+    Number(initialStop?.stopTrigger) > 0 &&
+    Number(quantity) >= 1;
+
+  if (wantOto) {
+    try {
+      const oto = await tastytradeSubmitOtoEntryStopWithCredentials(credentials, sessionRef, {
+        accountNumber,
+        optionSymbol: option.optionSymbol,
+        quantity,
+        entryPrice: limitPrice,
+        stopTrigger: initialStop.stopTrigger,
+        stopLimitPrice: initialStop.limitPrice ?? null,
+        stopOrderType: initialStop.orderType ?? null,
+      });
+
+      let fillStatus = null;
+      try {
+        fillStatus = await waitForBrokerOrderFill(
+          credentials,
+          sessionRef,
+          accountNumber,
+          oto.triggerOrderId
+        );
+      } catch (err) {
+        console.warn(`[brokerageConnector] OTO fill poll failed for ${oto.triggerOrderId}:`, err.message);
+      }
+      if (fillStatus?.status === 'rejected') {
+        throw new Error(`Tastytrade OTO trigger ${oto.triggerOrderId} was rejected`);
+      }
+
+      let fillCtx = { price: fillStatus?.fillPrice ?? null };
+      let finalized;
+      try {
+        finalized = await finalizeOtoPartialFill({
+          triggerOrderId: oto.triggerOrderId,
+          stopOrderId: oto.stopOrderId,
+          requestedQuantity: quantity,
+          fillStatus,
+          fillPrice: fillStatus?.fillPrice,
+          fillCtx,
+          stopPnlFrac: initialStop.stopPnlFrac,
+          getStatus: (id) =>
+            tastytradeGetOrderStatusWithCredentials(credentials, sessionRef, accountNumber, id),
+          cancelOrder: (id) =>
+            tastytradeCancelOrderWithCredentials(credentials, sessionRef, accountNumber, id),
+          placeStop: async (qty) => {
+            const fillStop = fillBasedStopParams(initialStop, fillCtx.price);
+            const placed = await tastytradeSubmitStopOrderWithCredentials(credentials, sessionRef, {
+              accountNumber,
+              optionSymbol: option.optionSymbol,
+              quantity: qty,
+              stopTrigger: fillStop.stopTrigger,
+              limitPrice: fillStop.limitPrice ?? null,
+              orderType: fillStop.orderType ?? initialStop.orderType ?? null,
+            });
+            if (!placed?.orderId) return placed;
+            try {
+              const status = await tastytradeGetOrderStatusWithCredentials(
+                credentials,
+                sessionRef,
+                accountNumber,
+                placed.orderId
+              );
+              if (!isConfirmedRestingStop(status)) {
+                return {
+                  ...placed,
+                  orderId: null,
+                  resting: false,
+                  reason: status?.rejectReason || status?.status || 'not_resting',
+                };
+              }
+              return { ...placed, resting: true, stopTrigger: status.stopTrigger ?? fillStop.stopTrigger };
+            } catch (err) {
+              return {
+                ...placed,
+                orderId: null,
+                resting: false,
+                reason: 'stop_status_unconfirmed',
+              };
+            }
+          },
+        });
+      } catch (err) {
+        console.error(
+          `[brokerageConnector] OTO fill/stop align failed for ${oto.triggerOrderId}:`,
+          err.message
+        );
+        finalized = {
+          fillStatus,
+          bookedQuantity: bookedEntryQuantity({
+            requestedQuantity: quantity,
+            fillQuantity: fillStatus?.fillQuantity,
+          }),
+          cancelledRemainder: false,
+          observedStopQty: null,
+          brokerDidMatch: false,
+          aligned: {
+            aligned: false,
+            stopOrderId: null,
+            replaced: false,
+            reason: err.message,
+          },
+        };
+      }
+      fillStatus = finalized.fillStatus || fillStatus;
+      fillStatus = await resolveFillStatusWithPrice(
+        credentials,
+        sessionRef,
+        accountNumber,
+        oto.triggerOrderId,
+        fillStatus
+      );
+      const bookedQty = finalized.bookedQuantity;
+      const fillStop = fillBasedStopParams(initialStop, fillStatus?.fillPrice);
+      const stopAligned = Boolean(finalized.aligned?.aligned);
+      const stopOrderId = restingStopIdAfterAlign({
+        aligned: finalized.aligned,
+        otoStopOrderId: oto.stopOrderId,
+      });
+      const stopAlignFailed =
+        bookedQty >= 1 &&
+        Math.floor(Number(fillStatus?.fillQuantity) || 0) >= 1 &&
+        !stopAligned;
+
+      if (stopAlignFailed) {
+        console.error(
+          `[${orderEnvironment === 'paper' ? 'SANDBOX' : 'LIVE'}][${strategy}] ` +
+            `OTO STOP ALIGN FAILED entry=${oto.triggerOrderId} ` +
+            `requested=${quantity} filled=${fillStatus?.fillQuantity ?? 0} booked=${bookedQty} ` +
+            `otoChildStopQty=${finalized.observedStopQty ?? 'n/a'} ` +
+            `observedTrigger=$${finalized.aligned?.observedTrigger ?? 'n/a'} ` +
+            `fillStopTrigger=$${fillStop.stopTrigger ?? 'n/a'} ` +
+            `reason=${finalized.aligned?.reason || 'unknown'} — clearing stop id for retry loop`
+        );
+      }
+
+      console.log(
+        `[${orderEnvironment === 'paper' ? 'SANDBOX' : 'LIVE'}][${strategy}] OTO placed ` +
+          `entry=${oto.triggerOrderId} stop=${stopOrderId || 'none'} complex=${oto.complexOrderId} ` +
+          `status=${fillStatus?.status || 'submitted'} fill=${fillStatus?.fillPrice ?? 'n/a'} ` +
+          `requested=${quantity} filled=${fillStatus?.fillQuantity ?? 0} booked=${bookedQty} ` +
+          `otoChildStopQty=${finalized.observedStopQty ?? 'n/a'} ` +
+          `brokerStopMatchedFill=${Boolean(finalized.brokerDidMatch)} ` +
+          `stopReplaced=${Boolean(finalized.aligned?.replaced)} ` +
+          `stopAlignReason=${finalized.aligned?.reason || 'n/a'} ` +
+          `stopAlignFailed=${stopAlignFailed} ` +
+          `remainderCancelled=${Boolean(finalized.cancelledRemainder)} ` +
+          `submittedStopTrigger=$${initialStop.stopTrigger} ` +
+          `fillStopTrigger=$${fillStop.stopTrigger}`
+      );
+
+      const confirmedFill = hasConfirmedFillPrice(fillStatus) ? fillStatus.fillPrice : null;
+      if (bookedQty >= 1 && confirmedFill == null) {
+        console.error(
+          `[brokerageConnector] OTO ${oto.triggerOrderId} booked qty=${bookedQty} ` +
+            `without a confirmed fill price — downstream must not use the selection quote`
+        );
+      }
+
+      return {
+        orderId: oto.triggerOrderId,
+        stopOrderId,
+        complexOrderId: oto.complexOrderId,
+        bracketType: 'OTO',
+        stopTrigger: Number(fillStop.stopTrigger) || Number(initialStop.stopTrigger),
+        stopPnlFrac: initialStop.stopPnlFrac ?? null,
+        paper: orderEnvironment === 'paper',
+        environment: orderEnvironment,
+        sandbox: Boolean(credentials.sandbox),
+        broker: 'tastytrade',
+        ...order,
+        status: fillStatus?.status || 'submitted',
+        fillPrice: confirmedFill,
+        filled: Boolean(fillStatus?.isFilled),
+        partialFill: Boolean(fillStatus?.isPartialFill) || (bookedQty >= 1 && bookedQty < quantity),
+        premium: confirmedFill ?? limitPrice,
+        quantity: bookedQty,
+        requestedQuantity: quantity,
+        fillQuantity: Math.floor(Number(fillStatus?.fillQuantity) || 0),
+        remainingQuantity: fillStatus?.remainingQuantity ?? null,
+        observedOtoStopQty: finalized.observedStopQty ?? null,
+        observedOtoStopTrigger: finalized.aligned?.observedTrigger ?? null,
+        stopQtyReplaced: Boolean(finalized.aligned?.replaced),
+        brokerStopMatchedFill: Boolean(finalized.brokerDidMatch),
+        stopAlignFailed,
+        stopAlignReason: finalized.aligned?.reason || null,
+      };
+    } catch (err) {
+      console.error(
+        `[BrokerageConnector] OTO bracket failed for ${strategy}: ${otoFallbackReason(err)} ` +
+          `— falling back to entry-only + stop retry`
+      );
+    }
+  }
+
   const orderId = await tastytradeSubmitOrderWithCredentials(credentials, sessionRef, {
     accountNumber,
     optionSymbol: option.optionSymbol,
@@ -1323,22 +1947,75 @@ export async function placeOptionOrder({
     throw new Error(`Tastytrade order ${orderId} was rejected`);
   }
 
+  const remaining = Number(fillStatus?.remainingQuantity);
+  const filledSoFar = Math.floor(Number(fillStatus?.fillQuantity) || 0);
+  if (filledSoFar >= 1 && remaining > 0) {
+    try {
+      await tastytradeCancelOrderWithCredentials(
+        credentials,
+        sessionRef,
+        accountNumber,
+        orderId
+      );
+      fillStatus = await tastytradeGetOrderStatusWithCredentials(
+        credentials,
+        sessionRef,
+        accountNumber,
+        orderId
+      );
+    } catch (err) {
+      console.warn(
+        `[brokerageConnector] Partial-fill remainder cancel failed for ${orderId}:`,
+        err.message
+      );
+    }
+  }
+
+  fillStatus = await resolveFillStatusWithPrice(
+    credentials,
+    sessionRef,
+    accountNumber,
+    orderId,
+    fillStatus
+  );
+
+  const bookedQty = bookedEntryQuantity({
+    requestedQuantity: quantity,
+    fillQuantity: fillStatus?.fillQuantity,
+  });
+  const confirmedFill = hasConfirmedFillPrice(fillStatus) ? fillStatus.fillPrice : null;
+  if (bookedQty >= 1 && confirmedFill == null) {
+    console.error(
+      `[brokerageConnector] Order ${orderId} booked qty=${bookedQty} ` +
+        `without a confirmed fill price — downstream must not use the selection quote`
+    );
+  }
+
   console.log(
     `[${orderEnvironment === 'paper' ? 'SANDBOX' : 'LIVE'}][${strategy}] Order placed id=${orderId} ` +
-      `status=${fillStatus?.status || 'submitted'} fill=${fillStatus?.fillPrice ?? 'n/a'}`
+      `status=${fillStatus?.status || 'submitted'} fill=${confirmedFill ?? 'n/a'} ` +
+      `requested=${quantity} filled=${fillStatus?.fillQuantity ?? 0} booked=${bookedQty}`
   );
 
   return {
     orderId,
+    stopOrderId: null,
+    complexOrderId: null,
+    bracketType: null,
     paper: orderEnvironment === 'paper',
     environment: orderEnvironment,
     sandbox: Boolean(credentials.sandbox),
     broker: 'tastytrade',
-    status: fillStatus?.status || 'submitted',
-    fillPrice: fillStatus?.fillPrice ?? null,
-    filled: Boolean(fillStatus?.isFilled),
     ...order,
-    premium: fillStatus?.fillPrice ?? limitPrice,
+    status: fillStatus?.status || 'submitted',
+    fillPrice: confirmedFill,
+    filled: Boolean(fillStatus?.isFilled),
+    partialFill: Boolean(fillStatus?.isPartialFill) || (bookedQty >= 1 && bookedQty < quantity),
+    premium: confirmedFill ?? limitPrice,
+    quantity: bookedQty,
+    requestedQuantity: quantity,
+    fillQuantity: Math.floor(Number(fillStatus?.fillQuantity) || 0),
+    remainingQuantity: fillStatus?.remainingQuantity ?? null,
   };
 }
 
@@ -1406,13 +2083,31 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
       const entrySym = orderLegSymbol(entryStatus.raw) || optionSymbol;
       if (entrySym) optionSymbol = entrySym;
 
-      if (isWorkingOrderStatus(entryStatus.status) && !entryStatus.isFilled) {
-        await tastytradeCancelOrderWithCredentials(
+      if (isWorkingOrderStatus(entryStatus.status) && !entryHasBrokerLong(entryStatus)) {
+        const cancelResult = await tastytradeCancelOrderWithCredentials(
           credentials,
           sessionRef,
           accountNumber,
           String(entryOrderId)
         );
+        if (!isCancelConfirmed(cancelResult)) {
+          console.error(
+            `${tag} entry cancel not confirmed orderId=${entryOrderId} ` +
+              `reason=${cancelResult?.reason || 'n/a'} — not treating as flat`
+          );
+          return {
+            orderId: null,
+            noBrokerPosition: false,
+            cancelledEntryOrderId: String(entryOrderId),
+            reason: 'entry_cancel_unconfirmed',
+            paper: orderEnvironment === 'paper',
+            environment: orderEnvironment,
+            sandbox: Boolean(credentials.sandbox),
+            status: cancelResult?.status || entryStatus.status,
+            fillPrice: null,
+            filled: false,
+          };
+        }
         console.log(
           `${tag} CONFLICT_CANCELLED entry_unfilled orderId=${entryOrderId} status=${entryStatus.status}`
         );
@@ -1433,8 +2128,39 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
         };
       }
 
+      if (isWorkingOrderStatus(entryStatus.status) && entryHasBrokerLong(entryStatus)) {
+        const cancelResult = await tastytradeCancelOrderWithCredentials(
+          credentials,
+          sessionRef,
+          accountNumber,
+          String(entryOrderId)
+        );
+        if (!isCancelConfirmed(cancelResult)) {
+          console.error(
+            `${tag} entry remainder cancel not confirmed orderId=${entryOrderId} ` +
+              `reason=${cancelResult?.reason || 'n/a'} — not submitting STC`
+          );
+          return {
+            orderId: null,
+            noBrokerPosition: false,
+            cancelledEntryOrderId: String(entryOrderId),
+            reason: 'entry_remainder_cancel_unconfirmed',
+            paper: orderEnvironment === 'paper',
+            environment: orderEnvironment,
+            sandbox: Boolean(credentials.sandbox),
+            status: cancelResult?.status || entryStatus.status,
+            fillPrice: null,
+            filled: false,
+          };
+        }
+        console.log(
+          `${tag} CONFLICT_CANCELLED entry_remainder orderId=${entryOrderId} ` +
+            `filled=${entryStatus.fillQuantity} remaining=${entryStatus.remainingQuantity}`
+        );
+      }
+
       // Entry already terminal without a fill — nothing to Sell-to-Close at the broker.
-      if (!entryStatus.isFilled && !isWorkingOrderStatus(entryStatus.status)) {
+      if (!entryHasBrokerLong(entryStatus) && !isWorkingOrderStatus(entryStatus.status)) {
         console.log(
           `${tag} OK_FLAT reason=entry_never_filled entryOrder=${entryOrderId} status=${entryStatus.status}`
         );
@@ -1457,6 +2183,32 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
         err.message
       );
     }
+  }
+
+  // Entry filled but the broker book is already flat (stop filled, manual STC).
+  // Do not submit another Sell — #88's later retries were Sell to Open.
+  let liveQty = null;
+  try {
+    liveQty = await getLiveOptionPositionQuantity(position, { environment: orderEnvironment });
+  } catch (err) {
+    console.warn(`${tag} live qty lookup failed:`, err.message);
+  }
+  if (liveQty === 0) {
+    const stc = await findLatestSellToCloseFill(position, { environment: orderEnvironment });
+    console.log(
+      `${tag} OK_FLAT reason=broker_already_flat qty=0 fill=${stc?.price ?? 'n/a'}`
+    );
+    return {
+      orderId: stc?.orderId ? String(stc.orderId) : null,
+      noBrokerPosition: true,
+      reason: 'broker_already_flat',
+      paper: orderEnvironment === 'paper',
+      environment: orderEnvironment,
+      sandbox: Boolean(credentials.sandbox),
+      status: 'broker_already_flat',
+      fillPrice: stc?.price ?? null,
+      filled: Number(stc?.price) > 0,
+    };
   }
 
   // Clear any other working orders on this OCC symbol (duplicate BTO / stale stops).
@@ -1502,7 +2254,7 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
             accountNumber,
             String(entryOrderId)
           );
-          if (!again.isFilled) {
+          if (!entryHasBrokerLong(again)) {
             console.log(
               `${tag} OK_FLAT reason=entry_unfilled_cancelled_after_conflict entryOrder=${entryOrderId}`
             );
@@ -1531,9 +2283,41 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
 
   let fillStatus = null;
   try {
-    fillStatus = await waitForBrokerOrderFill(credentials, sessionRef, accountNumber, result.orderId);
+    const fillWaitMs = Number(options.fillWaitMs);
+    const timeoutMs =
+      Number.isFinite(fillWaitMs) && fillWaitMs > 0 ? fillWaitMs : 15_000;
+    const pollMs =
+      Number.isFinite(Number(options.fillPollMs)) && Number(options.fillPollMs) > 0
+        ? Number(options.fillPollMs)
+        : timeoutMs <= 5_000
+          ? 500
+          : 1_000;
+    fillStatus = await waitForBrokerOrderFill(
+      credentials,
+      sessionRef,
+      accountNumber,
+      result.orderId,
+      { timeoutMs, pollMs }
+    );
   } catch (err) {
     console.warn(`${tag} Close fill poll failed for ${result.orderId}:`, err.message);
+  }
+
+  fillStatus = await resolveFillStatusWithPrice(
+    credentials,
+    sessionRef,
+    accountNumber,
+    result.orderId,
+    fillStatus
+  );
+
+  const confirmedFill = hasConfirmedFillPrice(fillStatus) ? fillStatus.fillPrice : null;
+  const filledConfirmed = Boolean(fillStatus?.isFilled) && confirmedFill != null;
+  if (fillStatus?.isFilled && confirmedFill == null) {
+    console.error(
+      `${tag} STC ${result.orderId} reported filled without a confirmed fill price ` +
+        `— not treating as settled`
+    );
   }
 
   const conflictNote =
@@ -1542,7 +2326,7 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
       : '';
   console.log(
     `${tag} OK closeOrderId=${result.orderId} qty=${closeQty} ` +
-      `status=${fillStatus?.status || 'submitted'} fill=${fillStatus?.fillPrice ?? 'n/a'}${conflictNote}`
+      `status=${fillStatus?.status || 'submitted'} fill=${confirmedFill ?? 'n/a'}${conflictNote}`
   );
 
   return {
@@ -1551,8 +2335,9 @@ export async function closeOptionOrder(position, exitPremium, quantity = null, o
     environment: orderEnvironment,
     sandbox: Boolean(credentials.sandbox),
     status: fillStatus?.status || 'submitted',
-    fillPrice: fillStatus?.fillPrice ?? null,
-    filled: Boolean(fillStatus?.isFilled),
+    fillPrice: confirmedFill,
+    fillQuantity: Math.floor(Number(fillStatus?.fillQuantity) || 0),
+    filled: filledConfirmed,
     cancelledConflicts: cancelled,
     retriedAfterConflict,
   };
@@ -1590,7 +2375,9 @@ export async function submitOptionStopOrder(position, {
       orderId: `PAPER-STOP-${Date.now()}`,
       paper: true,
       simulated: true,
+      resting: true,
       stopTrigger: trigger,
+      quantity: closeQty,
       limitPrice,
       orderType,
     };
@@ -1617,10 +2404,50 @@ export async function submitOptionStopOrder(position, {
   if (dryRun) {
     return {
       ...result,
+      resting: true,
       environment: orderEnvironment,
       sandbox: credentials.sandbox,
       optionSymbol,
     };
+  }
+
+  let status = null;
+  try {
+    status = await tastytradeGetOrderStatusWithCredentials(
+      credentials,
+      sessionRef,
+      accountNumber,
+      result.orderId
+    );
+  } catch (err) {
+    console.error(
+      `[brokerageConnector] Stop ${result.orderId} GET after submit failed:`,
+      err.message
+    );
+    return {
+      orderId: result.orderId,
+      paper: orderEnvironment === 'paper',
+      environment: orderEnvironment,
+      sandbox: credentials.sandbox,
+      stopTrigger: trigger,
+      quantity: closeQty,
+      limitPrice,
+      orderType,
+      optionSymbol,
+      resting: false,
+      reason: 'stop_status_unconfirmed',
+      error: err.message,
+    };
+  }
+
+  const resting = isConfirmedRestingStop(status);
+  const brokerTrigger = Number(status?.stopTrigger);
+  const brokerQty = stopQuantityFromStatus(status);
+  if (!resting) {
+    console.error(
+      `[brokerageConnector] Stop ${result.orderId} not resting after submit ` +
+        `status=${status?.status || 'n/a'} reject=${status?.rejectReason || 'n/a'}`
+    );
   }
 
   return {
@@ -1628,11 +2455,183 @@ export async function submitOptionStopOrder(position, {
     paper: orderEnvironment === 'paper',
     environment: orderEnvironment,
     sandbox: credentials.sandbox,
-    stopTrigger: trigger,
+    stopTrigger: Number.isFinite(brokerTrigger) && brokerTrigger > 0 ? brokerTrigger : trigger,
+    quantity: brokerQty ?? closeQty,
     limitPrice,
     orderType,
     optionSymbol,
+    status: status?.status || null,
+    rejectReason: status?.rejectReason || null,
+    resting,
+    reason: resting ? null : (status?.rejectReason || status?.status || 'not_resting'),
   };
+}
+
+/**
+ * PUT-replace a resting Stop STC. Does not cancel first — Tastytrade swaps the live order.
+ */
+export async function replaceOptionStopOrder(position, {
+  existingOrderId,
+  quantity,
+  stopTrigger,
+  limitPrice = null,
+  orderType = 'stop_market',
+  environment = 'paper',
+  strategy = 'unknown',
+} = {}) {
+  const closeQty = quantity ?? position.quantity;
+  const trigger = Number(stopTrigger);
+  const priorId = existingOrderId || position.broker_stop_order_id;
+  if (!priorId) {
+    throw new Error('replaceOptionStopOrder requires an existing resting order id');
+  }
+  if (!Number.isFinite(trigger) || trigger <= 0) {
+    throw new Error('Invalid stop trigger price');
+  }
+  if (!closeQty || closeQty < 1) {
+    throw new Error('Stop order quantity must be >= 1');
+  }
+
+  const orderEnvironment = normalizeOrderEnvironment(environment);
+
+  if (isBrokerDryRun() || String(priorId).startsWith('DRYRUN-')) {
+    const orderId = `DRYRUN-STOP-${Date.now()}`;
+    console.log(
+      `[BROKER DRY-RUN][${strategy}] would PUT-replace stop ${priorId} → trigger=$${trigger}`
+    );
+    return {
+      orderId,
+      replacesOrderId: String(priorId),
+      paper: true,
+      dryRun: true,
+      simulated: true,
+      resting: true,
+      replaced: true,
+      stopTrigger: trigger,
+      quantity: closeQty,
+      limitPrice,
+      orderType,
+      environment: orderEnvironment,
+    };
+  }
+
+  if (orderEnvironment === 'paper' && !hasCredentialsForEnvironment('paper')) {
+    const orderId = `PAPER-STOP-${Date.now()}`;
+    console.log(
+      `[PAPER][${strategy}] Broker stop PUT-replace ${priorId} → trigger=$${trigger}`
+    );
+    return {
+      orderId,
+      replacesOrderId: String(priorId),
+      paper: true,
+      simulated: true,
+      resting: true,
+      replaced: true,
+      stopTrigger: trigger,
+      quantity: closeQty,
+      limitPrice,
+      orderType,
+    };
+  }
+
+  if (orderEnvironment === 'live') {
+    assertLiveCredentialsForStrategy(strategy);
+  }
+
+  const { credentials, sessionRef } = getCredentialsForOrderEnvironment(orderEnvironment);
+  const accountNumber = await tastytradeGetAccountWithCredentials(credentials, sessionRef);
+  const optionSymbol = await resolveOptionSymbolForPosition(position);
+
+  const result = await tastytradeReplaceStopOrderWithCredentials(credentials, sessionRef, {
+    accountNumber,
+    existingOrderId: priorId,
+    optionSymbol,
+    quantity: closeQty,
+    stopTrigger: trigger,
+    limitPrice,
+    orderType,
+  });
+
+  let status = null;
+  try {
+    status = await tastytradeGetOrderStatusWithCredentials(
+      credentials,
+      sessionRef,
+      accountNumber,
+      result.orderId
+    );
+  } catch (err) {
+    console.error(
+      `[brokerageConnector] Replaced stop ${result.orderId} GET after PUT failed:`,
+      err.message
+    );
+    return {
+      orderId: result.orderId,
+      replacesOrderId: String(priorId),
+      paper: orderEnvironment === 'paper',
+      environment: orderEnvironment,
+      sandbox: credentials.sandbox,
+      stopTrigger: trigger,
+      quantity: closeQty,
+      limitPrice,
+      orderType,
+      optionSymbol,
+      replaced: true,
+      resting: false,
+      reason: 'stop_status_unconfirmed',
+      error: err.message,
+    };
+  }
+
+  const resting = isConfirmedRestingStop(status);
+  const brokerTrigger = Number(status?.stopTrigger);
+  const brokerQty = stopQuantityFromStatus(status);
+  if (!resting) {
+    console.error(
+      `[brokerageConnector] Replaced stop ${result.orderId} not resting after PUT ` +
+        `status=${status?.status || 'n/a'} reject=${status?.rejectReason || 'n/a'}`
+    );
+  }
+
+  return {
+    orderId: result.orderId,
+    replacesOrderId: String(priorId),
+    paper: orderEnvironment === 'paper',
+    environment: orderEnvironment,
+    sandbox: credentials.sandbox,
+    stopTrigger: Number.isFinite(brokerTrigger) && brokerTrigger > 0 ? brokerTrigger : trigger,
+    quantity: brokerQty ?? closeQty,
+    limitPrice,
+    orderType,
+    optionSymbol,
+    status: status?.status || null,
+    rejectReason: status?.rejectReason || null,
+    replaced: true,
+    resting,
+    reason: resting ? null : (status?.rejectReason || status?.status || 'not_resting'),
+  };
+}
+
+/** True when the prior stop is fully off the book (cancelled/gone/rejected) or already filled. */
+export async function verifyBrokerOrderTerminated(orderId, { environment = 'paper', strategy = 'unknown' } = {}) {
+  if (!orderId) return { terminated: true, filled: false, status: null, reason: 'no_order_id' };
+  if (String(orderId).startsWith('DRYRUN-') || String(orderId).startsWith('PAPER-')) {
+    return { terminated: true, filled: false, status: { status: 'cancelled' }, simulated: true };
+  }
+  try {
+    const status = await getBrokerOrderStatus(orderId, { environment, strategy });
+    if (status?.gone) return { terminated: true, filled: false, status };
+    if (status?.isFilled) return { terminated: true, filled: true, status };
+    if (isConfirmedCancelledStatus(status) || (status?.isTerminal && !status?.isFilled)) {
+      return { terminated: true, filled: false, status };
+    }
+    return { terminated: false, filled: false, status, reason: status?.status || 'still_working' };
+  } catch (err) {
+    if (isBrokerOrderGoneError(err)) {
+      return { terminated: true, filled: false, gone: true, status: { gone: true, status: 'cancelled' } };
+    }
+    return { terminated: false, filled: false, reason: err.message, error: err };
+  }
 }
 
 export async function cancelBrokerOrder(orderId, { environment = 'paper', strategy = 'unknown' } = {}) {
@@ -1825,13 +2824,17 @@ export async function getLiveAccountBalances() {
     `/accounts/${accountNumber}/balances`
   );
   const data = json?.data || json;
-  const cashBalance = parseBalanceField(
+  const settledCashBalance = parseBalanceField(
     data,
     'cash-balance',
     'cash_balance',
     'cash-available-for-trading',
     'cash_available_for_trading'
   );
+  const pendingCash = parseBalanceField(data, 'pending-cash', 'pending_cash') ?? 0;
+  const pendingCashEffect =
+    data?.['pending-cash-effect'] ?? data?.pending_cash_effect ?? null;
+  const tradableBalance = computeTradableCashBalance(data);
   const netLiquidatingValue = parseBalanceField(
     data,
     'net-liquidating-value',
@@ -1841,10 +2844,16 @@ export async function getLiveAccountBalances() {
     'account_value'
   );
 
+  // cashBalance is the tradable figure used by live Remaining / FCFS sizing.
+  // Settled-only cash is exposed separately so daily-loss baseline stays conservative.
   return {
     accountNumber,
-    cashBalance: cashBalance ?? netLiquidatingValue ?? 0,
-    netLiquidatingValue: netLiquidatingValue ?? cashBalance ?? 0,
+    cashBalance: tradableBalance || settledCashBalance || netLiquidatingValue || 0,
+    settledCashBalance: settledCashBalance ?? 0,
+    pendingCash,
+    pendingCashEffect,
+    tradableBalance: tradableBalance || 0,
+    netLiquidatingValue: netLiquidatingValue ?? settledCashBalance ?? 0,
     raw: data,
   };
 }
@@ -1992,6 +3001,76 @@ export async function submitOptionOrderValidateOnly({
     existsAsLiveOrder,
     responseBody: parsed,
     responseRaw: rawBody,
+  };
+}
+
+/**
+ * POST /accounts/{id}/complex-orders/dry-run for an OTO entry+stop. Never POST /complex-orders.
+ */
+export async function submitOtoEntryStopValidateOnly({
+  environment = 'live',
+  ticker = 'SPY',
+  direction = 'PUT',
+  quantity = 1,
+  strategy = 'oto_validate_only',
+} = {}) {
+  if (Number(quantity) !== 1) {
+    throw new Error('submitOtoEntryStopValidateOnly refuses quantity !== 1');
+  }
+  const orderEnvironment = normalizeOrderEnvironment(environment);
+  if (orderEnvironment === 'live') {
+    assertLiveCredentialsForStrategy(strategy);
+  } else if (!hasCredentialsForEnvironment('paper')) {
+    throw new Error('Sandbox credentials required for paper OTO validate-only');
+  }
+
+  const { credentials, sessionRef } = getCredentialsForOrderEnvironment(orderEnvironment);
+  const accountNumber = await tastytradeGetAccountWithCredentials(credentials, sessionRef);
+  const symbol = toTastytradeSymbol(ticker);
+  const chainJson = await tastytradeRequestWithCredentials(
+    credentials,
+    sessionRef,
+    `/option-chains/${encodeURIComponent(symbol)}/nested`
+  );
+  const expirations = extractExpirations(chainJson);
+  const exp =
+    expirations.find((e) => Number(e['days-to-expiration'] ?? e.days_to_expiration) >= 1) ||
+    expirations[0];
+  if (!exp) throw new Error(`No nested-chain expirations for ${ticker}`);
+  const expiration = normalizeExpirationDate(
+    exp['expiration-date'] || exp.expiration_date || exp.expiration
+  );
+  const strikes = extractStrikes(exp);
+  const mid = strikes[Math.floor(strikes.length / 2)];
+  const quotes = readLegQuotes(mid, direction);
+  const optionSymbol = quotes.optionSymbol;
+  if (!optionSymbol) throw new Error('Could not resolve option symbol for OTO dry-run');
+
+  const dryRunPath = `/accounts/${accountNumber}/complex-orders/dry-run`;
+  if (!dryRunPath.endsWith('/complex-orders/dry-run')) {
+    throw new Error('REFUSING: OTO dry-run path malformed');
+  }
+
+  const result = await tastytradeSubmitOtoEntryStopWithCredentials(credentials, sessionRef, {
+    accountNumber,
+    optionSymbol,
+    quantity: 1,
+    entryPrice: 0.05,
+    stopTrigger: 0.04,
+    stopOrderType: 'stop_market',
+    dryRun: true,
+  });
+
+  return {
+    validateOnly: true,
+    dryRunEndpoint: dryRunPath,
+    noRealOrderSubmitted: true,
+    environment: orderEnvironment,
+    sandbox: Boolean(credentials.sandbox),
+    accountNumber,
+    expiration,
+    optionSymbol,
+    ...result,
   };
 }
 

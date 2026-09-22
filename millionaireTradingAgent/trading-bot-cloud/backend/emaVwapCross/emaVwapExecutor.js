@@ -1,57 +1,64 @@
 import { placeOptionOrder } from '../brokerageConnector.js';
 import { ladderPositionSize } from '../ladder/ladderSizing.js';
+import { OPTION_OPENING_COMMISSION_PER_CONTRACT } from '../ladder/ladderConfig.js';
+import { bookedEntryQuantity, shouldBookConfirmedEntry } from '../ladder/orderFillStatus.js';
+import { maybeSkipUnfilledOpenInsert } from '../ladder/zeroFillEntry.js';
+import { reportEntryFillQty } from '../ladder/entryFillAlerts.js';
 import {
   EMA_VWAP_MAX_POSITIONS,
   EMA_VWAP_SYMBOLS,
-  EMA_VWAP_MIN_ENTRY_PREMIUM,
+  EMA_VWAP_ENTRY_SIZING,
   EMA_VWAP_STOP_LOSS_PCT,
+  EMA_VWAP_HARD_STOP_PCT,
+  EMA_VWAP_CORRELATION_GROUP,
+  CORRELATED_POSITION_BLOCK_REASON,
+  EMA_VWAP_MIN_ENTRY_PREMIUM,
 } from './emaVwapConfig.js';
 import {
   getEmaVwapMode,
   getEmaVwapBudgetRemaining,
   getEmaVwapOpenPositionCount,
+  getEmaVwapOpenPositions,
   insertEmaVwapPosition,
   updateEmaVwapPositionBrokerStop,
   getEmaVwapSymbolState,
   upsertEmaVwapSymbolState,
   hasEmaVwapCrossExecutedToday,
+  logEmaVwapEvent,
+  closeEmaVwapPosition,
 } from './emaVwapDb.js';
 import { getTotalAllocated } from '../budget/budgetAllocations.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
-import { createLadderBrokerStopHandlers } from '../ladder/ladderStopOrders.js';
+import { createLadderBrokerStopHandlers, buildBrokerStopOrderParams } from '../ladder/ladderStopOrders.js';
+import { kickInitialStopUntilProtected, buildInitialStopRetryExtras } from '../ladder/initialStopRetry.js';
+import { GATE_REMOVED_ENTRY_REASON } from '../zeroDte/confirmationBarQuality.js';
 import { selectEmaVwapStrike } from './emaVwapStrikeSelector.js';
 import {
   sendEmaVwapTradeOpenedTelegram,
   sendEmaVwapSignalNotExecutedTelegram,
   sendEmaVwapBudgetExhaustedTelegram,
   sendEmaVwapInsufficientBudgetTelegram,
+  sendEmaVwapTradeClosedTelegram,
 } from './emaVwapTelegram.js';
 import {
   getFiveMinuteBars,
   etDateKey,
   isWithinOrbSession,
-  barEtMinutes,
 } from '../orb/tradierTimesales.js';
-import { computeSessionIndicators } from './emaVwapIndicators.js';
-import { evaluateEmaVwapSignals, parseFsm } from './emaVwapSignalEngine.js';
-import { isPremiumBelowFloor } from '../zeroDte/entryGuards.js';
-import { checkLiveEntryGate } from '../budget/liveEntryGate.js';
+import { persistUnderlyingBarsInBackground } from '../marketData/persistUnderlyingBars.js';
 import {
-  getStopLossReentryCooldown,
-  formatCooldownRemaining,
-  STOP_LOSS_REENTRY_COOLDOWN_MS,
-} from '../entryCooldown.js';
-
-function isSessionBar(bar) {
-  const mins = barEtMinutes(bar);
-  if (mins == null) return false;
-  return mins >= 9 * 60 + 30 && mins < 15 * 60 + 5;
-}
-
-function filterNewBars(bars, lastProcessedTime) {
-  if (!lastProcessedTime) return bars;
-  return bars.filter((b) => b.time > lastProcessedTime);
-}
+  evaluateEmaVwapSignals,
+  parseFsm,
+  logEmaVwapExplosiveEvents,
+} from './emaVwapSignalEngine.js';
+import {
+  selectEmaVwapEvaluationBars,
+  waitForCompletedFiveMinuteBarSettle,
+} from './emaVwapBarTiming.js';
+import { checkLiveEntryGate } from '../budget/liveEntryGate.js';
+import { getSameDayReentryGate } from '../entryReentryGate.js';
+import { getDailyProfitHalt, DAILY_PROFIT_HALT_REASON, DAILY_PROFIT_HALT_THRESHOLD_DOLLARS } from '../budget/dailyProfitHalt.js';
+import { isPremiumBelowFloor } from '../zeroDte/entryGuards.js';
 
 /** More than ~1 poll interval behind — replay FSM without executing historical entries. */
 function isCatchUpReplay(lastProcessedTime, newBars) {
@@ -99,13 +106,18 @@ function evaluateEmaVwapWithCatchUp(symbol, fsm, newBars) {
   const catchUp = isCatchUpReplay(lastProcessed, newBars);
 
   if (!catchUp) {
-    const { fsm: updatedFsm, entries } = evaluateEmaVwapSignals(symbol, newBars, fsm);
+    const { fsm: updatedFsm, entries, events } = evaluateEmaVwapSignals(
+      symbol,
+      newBars,
+      fsm
+    );
     return {
       catchUp: false,
       suppressedEntryCount: 0,
       replayBarCount: newBars.length,
       fsm: updatedFsm,
       entries,
+      events,
     };
   }
 
@@ -113,14 +125,17 @@ function evaluateEmaVwapWithCatchUp(symbol, fsm, newBars) {
   const liveBars = newBars.slice(-1);
   let state = fsm;
   let suppressedEntryCount = 0;
+  const events = [];
 
   if (replayBars.length > 0) {
     const replay = evaluateEmaVwapSignals(symbol, replayBars, state);
     state = replay.fsm;
     suppressedEntryCount += replay.entries.length;
+    events.push(...(replay.events || []));
   }
 
   const live = evaluateEmaVwapSignals(symbol, liveBars, state);
+  events.push(...(live.events || []));
 
   return {
     catchUp: true,
@@ -128,6 +143,7 @@ function evaluateEmaVwapWithCatchUp(symbol, fsm, newBars) {
     replayBarCount: replayBars.length,
     fsm: live.fsm,
     entries: live.entries,
+    events,
   };
 }
 
@@ -144,9 +160,14 @@ function positionSize(budgetRemaining, openCount, premium) {
     };
   }
 
-  // Affordability is judged against perSlot, not total remaining.
-  const perSlot = budgetRemaining / slots;
-  return { ...ladderPositionSize(perSlot, premium), perSlot, slots };
+  // Cap and budget are independent: slots are a hard concurrent ceiling only.
+  // FCFS: size against full remaining budget (not remaining ÷ open slots).
+  // Tradeoff: first signal can consume most/all remaining budget.
+  return {
+    ...ladderPositionSize(budgetRemaining, premium, EMA_VWAP_ENTRY_SIZING),
+    perSlot: budgetRemaining,
+    slots,
+  };
 }
 
 async function loadSymbolFsm(symbol, tradeDate) {
@@ -165,9 +186,26 @@ async function tryExecuteEntry(entry) {
     return { executed: false, reason: 'manual_mode' };
   }
 
+  const profitHalt = await getDailyProfitHalt('emavwap');
+  if (profitHalt.halt) {
+    console.log(
+      `[EMA/VWAP] ${DAILY_PROFIT_HALT_REASON} — skipping ${entry.symbol} ${entry.direction}` +
+        ` (realizedPnlToday=$${Number(profitHalt.realizedPnlToday).toFixed(2)} on ${profitHalt.tradeDate})`
+    );
+    await sendEmaVwapSignalNotExecutedTelegram({
+      ticker: entry.symbol,
+      direction: entry.direction,
+      reason: `Daily profit halt — account realized P&L $${Number(profitHalt.realizedPnlToday).toFixed(2)} reached $${DAILY_PROFIT_HALT_THRESHOLD_DOLLARS.toFixed(2)} today; new entries blocked`,
+    });
+    return { executed: false, reason: DAILY_PROFIT_HALT_REASON };
+  }
+
   const liveGate = await checkLiveEntryGate('emavwap');
   if (!liveGate.allowed) {
     console.log(`[EMA/VWAP] ${liveGate.reason} — blocking entry for ${entry.symbol}`);
+    if (liveGate.reason === 'paper_entry_blocked') {
+      return { executed: false, reason: 'paper_entry_blocked' };
+    }
     await sendEmaVwapSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
@@ -176,23 +214,22 @@ async function tryExecuteEntry(entry) {
     return { executed: false, reason: liveGate.reason };
   }
 
-  const cooldown = await getStopLossReentryCooldown({
+  const reentry = await getSameDayReentryGate({
     strategy: 'emavwap',
     ticker: entry.symbol,
     direction: entry.direction,
   });
-  if (cooldown.blocked) {
-    const left = formatCooldownRemaining(cooldown.remainingMs);
+  if (reentry.blocked) {
     console.log(
-      `[EMA/VWAP] Stop-loss cooldown (${STOP_LOSS_REENTRY_COOLDOWN_MS / 60000}m) — ` +
-        `skipping ${entry.symbol} ${entry.direction} (${left} remaining)`
+      `[EMA/VWAP] Same-day loss block — skipping ${entry.symbol} ${entry.direction}` +
+        ` (last today: ${reentry.lastCloseReason} pnl=${reentry.lastPnl})`
     );
     await sendEmaVwapSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: `Stop-loss cooldown — ${left} remaining before re-entry`,
+      reason: 'Same-day loss block — no re-entry after a losing close today',
     });
-    return { executed: false, reason: 'stop_loss_cooldown' };
+    return { executed: false, reason: 'same_day_loss_block' };
   }
 
   const openCount = await getEmaVwapOpenPositionCount();
@@ -200,9 +237,42 @@ async function tryExecuteEntry(entry) {
     await sendEmaVwapSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: 'Max open EMA/VWAP positions (3) reached',
+      reason: `Max open EMA/VWAP positions (${EMA_VWAP_MAX_POSITIONS}) reached`,
     });
     return { executed: false, reason: 'max_positions' };
+  }
+
+  const openPositions = await getEmaVwapOpenPositions();
+  const entryTicker = String(entry.symbol || '').toUpperCase();
+  const entryDir = String(entry.direction || '').toUpperCase();
+  const corrGroup = new Set(EMA_VWAP_CORRELATION_GROUP.map((t) => String(t).toUpperCase()));
+  if (corrGroup.has(entryTicker)) {
+    const peer = openPositions.find((p) => {
+      const pTicker = String(p.ticker || '').toUpperCase();
+      const pDir = String(p.direction || '').toUpperCase();
+      return (
+        corrGroup.has(pTicker) &&
+        pTicker !== entryTicker &&
+        pDir === entryDir
+      );
+    });
+    if (peer) {
+      console.log(
+        `[EMA/VWAP] ${CORRELATED_POSITION_BLOCK_REASON} — skipping ${entry.symbol} ${entry.direction}` +
+          ` (open peer ${peer.ticker} ${peer.direction})`
+      );
+      await sendEmaVwapSignalNotExecutedTelegram({
+        ticker: entry.symbol,
+        direction: entry.direction,
+        reason:
+          `Correlated position block — already open ${peer.ticker} ${peer.direction} in SPY/QQQ/IWM group`,
+      });
+      return {
+        executed: false,
+        reason: CORRELATED_POSITION_BLOCK_REASON,
+        peer: { ticker: peer.ticker, direction: peer.direction },
+      };
+    }
   }
 
   const budgetRemaining = await getEmaVwapBudgetRemaining();
@@ -225,32 +295,41 @@ async function tryExecuteEntry(entry) {
   }
 
   if (isPremiumBelowFloor(strikeSelection.premium, EMA_VWAP_MIN_ENTRY_PREMIUM)) {
-    const floorLabel =
-      EMA_VWAP_MIN_ENTRY_PREMIUM != null
-        ? `$${EMA_VWAP_MIN_ENTRY_PREMIUM}`
-        : 'EMA_VWAP_MIN_ENTRY_PREMIUM (not set)';
     await sendEmaVwapSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: `Entry premium $${strikeSelection.premium} below minimum floor (${floorLabel})`,
+      reason: `Entry premium $${strikeSelection.premium} below minimum floor ($${EMA_VWAP_MIN_ENTRY_PREMIUM})`,
     });
     return { executed: false, reason: 'premium_below_floor' };
   }
 
   const sizing = positionSize(budgetRemaining, openCount, strikeSelection.premium);
   if (!sizing.affordable || sizing.quantity < 1 || sizing.totalCost > budgetRemaining) {
+    console.log(
+      `[EMA/VWAP] skip entry ${entry.symbol}: 0 contracts affordable ` +
+        `budget=$${Number(budgetRemaining).toFixed(2)} premium=$${strikeSelection.premium} ` +
+        `contractCost=$${Number(sizing.requiredCost).toFixed(2)} (notional+$${OPTION_OPENING_COMMISSION_PER_CONTRACT} fee)`
+    );
     await sendEmaVwapInsufficientBudgetTelegram({
       ticker: entry.symbol,
       requiredCost: sizing.requiredCost,
       budgetRemaining,
-      perSlot: sizing.perSlot,
-      slots: sizing.slots,
     });
     return { executed: false, reason: 'budget_exhausted' };
   }
 
   try {
     const environment = await getStrategyEnvironment('emavwap');
+    const stopParams = buildBrokerStopOrderParams(
+      {
+        entry_premium: strikeSelection.premium,
+        quantity: sizing.quantity,
+        contracts_open: sizing.quantity,
+        exit_phase: 'LADDER:0',
+        trail_peak_pnl_frac: 0,
+      },
+      { initialStopPct: EMA_VWAP_STOP_LOSS_PCT }
+    );
     const order = await placeOptionOrder({
       ticker: strikeSelection.symbol,
       direction: strikeSelection.direction,
@@ -260,18 +339,68 @@ async function tryExecuteEntry(entry) {
       premium: strikeSelection.premium,
       environment,
       strategy: 'emavwap',
+      initialStop: stopParams,
     });
+
+    const bookedQty = bookedEntryQuantity({
+      requestedQuantity: sizing.quantity,
+      fillQuantity: order.fillQuantity,
+    });
+    const unfilledSkip = await maybeSkipUnfilledOpenInsert({
+      order,
+      bookedQty,
+      environment,
+      strategy: 'emavwap',
+      ticker: strikeSelection.symbol,
+      direction: strikeSelection.direction,
+      logEvent: async ({ ticker, eventType, direction, breakoutLevel, details }) =>
+        logEmaVwapEvent({
+          ticker,
+          tradeDate: etDateKey(),
+          eventType,
+          direction,
+          breakoutLevel,
+          details,
+        }),
+    });
+    if (unfilledSkip.skipped) {
+      return { executed: false, reason: unfilledSkip.reason, order, strikeSelection };
+    }
+    if (
+      !shouldBookConfirmedEntry({
+        fillQuantity: order.fillQuantity,
+        bookedQuantity: bookedQty,
+        fillPrice: order.fillPrice,
+        dryRun: order.dryRun,
+        simulated: order.simulated,
+      })
+    ) {
+      console.error(
+        `[EMA/VWAP] ${strikeSelection.symbol} filled qty=${bookedQty} without a confirmed fill price ` +
+          `— refusing to book the selection quote $${strikeSelection.premium}`
+      );
+      return { executed: false, reason: 'entry_fill_price_missing', order, strikeSelection };
+    }
+    const bookedPremium = Number(order.fillPrice);
+
+    if (entry.gate_removed_entry === true) {
+      console.log(
+        `[EMA/VWAP] ${GATE_REMOVED_ENTRY_REASON} fill path — ${strikeSelection.symbol} ${strikeSelection.direction}` +
+          ` would_have=${entry.would_have_rejected_reason}` +
+          ` breaches=${(entry.confirm_metrics?.breaches || []).join(',') || 'n/a'}`
+      );
+    }
 
     const positionId = await insertEmaVwapPosition({
       ticker: strikeSelection.symbol,
       direction: strikeSelection.direction,
       strike: strikeSelection.strike,
       expiration: strikeSelection.expiration,
-      entry_premium: strikeSelection.premium,
-      quantity: sizing.quantity,
+      entry_premium: bookedPremium,
+      quantity: bookedQty,
       order_id: order.orderId,
       broker: order.broker || 'tastytrade',
-      entry_contracts: sizing.entryContracts,
+      entry_contracts: bookedQty,
       pyramid_tier: 'ladder',
       vwap_at_entry: entry.vwap_at_entry,
       ema_at_entry: entry.ema_at_entry,
@@ -282,7 +411,17 @@ async function tryExecuteEntry(entry) {
       entry_delta: strikeSelection.entry_delta,
       entry_metadata_json: JSON.stringify({
         ema_vwap_gap: entry.ema_vwap_gap,
+        entry_policy: entry.entry_policy ?? 'control',
+        confirm_metrics: entry.confirm_metrics ?? null,
+        gate_removed_entry: entry.gate_removed_entry === true,
+        would_have_rejected_reason: entry.would_have_rejected_reason ?? null,
         spot: strikeSelection.spot,
+        adx_at_entry: entry.adx_at_entry ?? null,
+        requested_quantity: sizing.quantity,
+        fill_quantity: order.fillQuantity ?? null,
+        booked_quantity: bookedQty,
+        selection_premium: strikeSelection.premium,
+        fill_premium: order.fillPrice ?? null,
       }),
     });
 
@@ -290,30 +429,84 @@ async function tryExecuteEntry(entry) {
       strategy: 'emavwap',
       environment,
       initialStopPct: EMA_VWAP_STOP_LOSS_PCT,
+      hardStopPct: EMA_VWAP_HARD_STOP_PCT,
       updateBrokerStopState: updateEmaVwapPositionBrokerStop,
       fullClosePosition: async () => null,
     });
-    await brokerStop.placeInitialStop({
+    const openedPosition = {
       id: positionId,
       ticker: strikeSelection.symbol,
       direction: strikeSelection.direction,
       strike: strikeSelection.strike,
       expiration: strikeSelection.expiration,
-      entry_premium: strikeSelection.premium,
-      quantity: sizing.quantity,
-      contracts_open: sizing.quantity,
+      entry_premium: bookedPremium,
+      quantity: bookedQty,
+      contracts_open: bookedQty,
+      order_id: order.orderId,
       exit_phase: 'LADDER:0',
       trail_peak_pnl_frac: 0,
-    });
+    };
+    if (order.stopOrderId && !order.stopAlignFailed) {
+      await updateEmaVwapPositionBrokerStop(positionId, {
+        broker_stop_order_id: order.stopOrderId,
+        broker_stop_trigger_price: order.stopTrigger ?? stopParams?.stopTrigger ?? null,
+        broker_stop_pnl_frac: order.stopPnlFrac ?? stopParams?.stopPnlFrac ?? null,
+      });
+      console.log(
+        `[EMA/VWAP] OTO stop resting #${positionId} order=${order.stopOrderId} trigger=$${order.stopTrigger ?? stopParams?.stopTrigger}`
+      );
+    } else {
+      kickInitialStopUntilProtected(
+        brokerStop,
+        openedPosition,
+        buildInitialStopRetryExtras({
+          strategy: 'emavwap',
+          position: openedPosition,
+          getOpenPositions: getEmaVwapOpenPositions,
+          environment,
+          fullClosePosition: closeEmaVwapPosition,
+          onNotify: async (pos, reason, pnlFrac) => {
+            await sendEmaVwapTradeClosedTelegram({
+              ticker: pos.ticker,
+              reason,
+              pnlPct: pnlFrac,
+            });
+          },
+        })
+      );
+    }
 
     console.log(
-      `[EMA/VWAP] Opened ${strikeSelection.symbol} qty=${sizing.quantity} ladder entry_contracts=${sizing.entryContracts}`
+      `[EMA/VWAP] Opened ${strikeSelection.symbol} qty=${bookedQty} ` +
+        `(requested=${sizing.quantity} filled=${order.fillQuantity ?? 'n/a'}) ` +
+        `premium=$${bookedPremium} ladder entry_contracts=${bookedQty}` +
+        (order.bracketType ? ` bracket=${order.bracketType}` : '')
     );
+
+    await reportEntryFillQty({
+      strategy: 'emavwap',
+      ticker: strikeSelection.symbol,
+      direction: strikeSelection.direction,
+      strike: strikeSelection.strike,
+      positionId,
+      requestedQty: sizing.quantity,
+      bookedQty,
+      order,
+      logEvent: async ({ ticker, eventType, direction, breakoutLevel, details }) =>
+        logEmaVwapEvent({
+          ticker,
+          tradeDate: etDateKey(),
+          eventType,
+          direction,
+          breakoutLevel,
+          details,
+        }),
+    });
 
     await sendEmaVwapTradeOpenedTelegram({
       ticker: strikeSelection.symbol,
       direction: strikeSelection.direction,
-      premium: strikeSelection.premium,
+      premium: bookedPremium,
       paper: order.paper,
       strike: strikeSelection.strike,
       strikeBucket: strikeSelection.strike_bucket,
@@ -322,6 +515,21 @@ async function tryExecuteEntry(entry) {
     return { executed: true, order, strikeSelection };
   } catch (err) {
     console.error(`[EMA/VWAP] Order failed for ${entry.symbol}:`, err.message);
+    try {
+      await logEmaVwapEvent({
+        ticker: entry.symbol,
+        tradeDate: etDateKey(),
+        eventType: 'execution_error',
+        direction: entry.direction,
+        breakoutLevel: entry.vwap_at_entry ?? null,
+        details: {
+          reason: 'execution_error',
+          error: err.message,
+        },
+      });
+    } catch (logErr) {
+      console.warn(`[EMA/VWAP] execution_error event log failed:`, logErr.message);
+    }
     await sendEmaVwapSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
@@ -336,17 +544,23 @@ export async function runEmaVwapScanAndExecute() {
     return { skipped: true, reason: 'outside_emavwap_session' };
   }
 
+  // Cron fires at :00/:05/:10. Wait for Tradier to finalize the bar that just
+  // closed, then evaluate that completed bar — never the one that just opened.
+  await waitForCompletedFiveMinuteBarSettle();
+
   const tradeDate = etDateKey();
   const results = [];
 
   for (const symbol of EMA_VWAP_SYMBOLS) {
     try {
       const bars = await getFiveMinuteBars(symbol, tradeDate);
-      const sessionBars = bars.filter(isSessionBar);
-      const enriched = computeSessionIndicators(sessionBars);
+      persistUnderlyingBarsInBackground(symbol, bars, { source: 'emavwap-scan' });
 
       let fsm = await loadSymbolFsm(symbol, tradeDate);
-      const newBars = filterNewBars(enriched, fsm.last_processed_bar_time);
+      const newBars = selectEmaVwapEvaluationBars(bars, {
+        lastProcessedTime: fsm.last_processed_bar_time,
+        now: new Date(),
+      });
 
       let updatedFsm = fsm;
       let entries = [];
@@ -358,10 +572,12 @@ export async function runEmaVwapScanAndExecute() {
           replayBarCount,
           fsm: nextFsm,
           entries: liveEntries,
+          events,
         } = evaluateEmaVwapWithCatchUp(symbol, fsm, newBars);
 
         updatedFsm = nextFsm;
         entries = liveEntries;
+        await logEmaVwapExplosiveEvents(events || [], tradeDate);
 
         if (catchUp) {
           console.log(

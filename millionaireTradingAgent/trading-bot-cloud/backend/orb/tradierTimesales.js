@@ -1,8 +1,10 @@
+// Kept for reference; market-data always uses production (realtime).
 const SANDBOX_URL = 'https://sandbox.tradier.com/v1';
 const PRODUCTION_URL = 'https://api.tradier.com/v1';
 
 function getBaseUrl() {
-  return process.env.TRADIER_SANDBOX !== 'false' ? SANDBOX_URL : PRODUCTION_URL;
+  void SANDBOX_URL; // neutralize TRADIER_SANDBOX host gate — no sandbox fallback
+  return PRODUCTION_URL;
 }
 
 function getToken() {
@@ -88,10 +90,28 @@ function normalizeTimesalesBar(raw) {
 }
 
 export async function getFiveMinuteBars(symbol, tradeDate = etDateKey()) {
+  return getTimesalesBars(symbol, tradeDate, '5min');
+}
+
+/** Finest intraday grain Tradier timesales exposes for this account. */
+export async function getOneMinuteBars(symbol, tradeDate = etDateKey()) {
+  return getTimesalesBars(symbol, tradeDate, '1min');
+}
+
+/** Option OCC timesales. Returns [] on HTTP / empty — caller falls back. */
+export async function getOptionTimesalesBars(optionSymbol, tradeDate, interval = '1min') {
+  try {
+    return await getTimesalesBars(optionSymbol, tradeDate, interval);
+  } catch {
+    return [];
+  }
+}
+
+async function getTimesalesBars(symbol, tradeDate, interval) {
   const { start, end } = formatTimesalesStartEnd(tradeDate);
   const url = new URL(`${getBaseUrl()}/markets/timesales`);
   url.searchParams.set('symbol', symbol);
-  url.searchParams.set('interval', '5min');
+  url.searchParams.set('interval', interval);
   url.searchParams.set('start', start);
   url.searchParams.set('end', end);
 

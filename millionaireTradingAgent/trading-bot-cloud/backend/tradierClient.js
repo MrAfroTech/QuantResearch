@@ -2,7 +2,8 @@ const SANDBOX_URL = 'https://sandbox.tradier.com/v1';
 const PRODUCTION_URL = 'https://api.tradier.com/v1';
 
 function getBaseUrl() {
-  return process.env.TRADIER_SANDBOX !== 'false' ? SANDBOX_URL : PRODUCTION_URL;
+  void SANDBOX_URL; // neutralize TRADIER_SANDBOX host gate — no sandbox fallback
+  return PRODUCTION_URL;
 }
 
 function getToken() {

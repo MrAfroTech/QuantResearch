@@ -11,6 +11,7 @@ import {
 import { isPaperTrading, getOptionPremium } from './brokerageConnector.js';
 import { getQuote } from './tradierClient.js';
 import { sendModeSwitchTelegram } from './telegramHandler.js';
+import { getScheduledTradingHalt } from './budget/tradingHalt.js';
 import { getLastScanResults } from './cloudScanner.js';
 import { getWatchlist, areDashboardControlsEnabled } from './config.js';
 import { getPremarketOpenPositions, getPremarketTradeLog } from './premarketBreakout/premarketDb.js';
@@ -22,10 +23,18 @@ import {
   getAllStrategyEnvironments,
   setStrategyEnvironment,
 } from './strategyEnvironment.js';
-import { isNeverOpenedCloseReason } from './tradePnl.js';
+import { displayPnlDollars, isNeverOpenedCloseReason } from './tradePnl.js';
+import {
+  buildPersistedDailyPnlByKey,
+  tradeCountsAsLiveBook,
+} from './budget/dailyPnlCalendar.js';
+import { resolveEventOutcomes } from './analytics/eventLogOutcomes.js';
+import { ORB_ENTRIES_ENABLED } from './orb/orbConfig.js';
 
 const ORB_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
 const TRADE_LOG_LIMIT = 40;
+const EVENT_LOG_LIMIT = 80;
+const EVENT_LOG_LOOKBACK_DAYS = 7;
 
 let schemaReady;
 
@@ -36,6 +45,10 @@ async function ensureHandlerSchema() {
     await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS swing_mode TEXT DEFAULT 'AUTO'`;
     await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS orb_mode TEXT DEFAULT 'AUTO'`;
     await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS premarket_mode TEXT DEFAULT 'AUTO'`;
+    await sql`ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
+    await sql`ALTER TABLE orb_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
+    await sql`ALTER TABLE premarket_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
+    await sql`ALTER TABLE emavwap_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
   })();
   return schemaReady;
 }
@@ -83,6 +96,101 @@ function mondayOfWeekEt(date = new Date()) {
   return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
 }
 
+function etDateDaysAgo(days, date = new Date()) {
+  const { year, month, day } = getEtParts(date);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  utc.setUTCDate(utc.getUTCDate() - Number(days || 0));
+  return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
+}
+
+function rowToPlain(row) {
+  if (!row) return null;
+  return Object.fromEntries(Object.entries(row));
+}
+
+async function fetchBreakoutEventLog() {
+  const sql = getSql();
+  const since = etDateDaysAgo(EVENT_LOG_LOOKBACK_DAYS);
+  const tradeSince = `${etDateDaysAgo(EVENT_LOG_LOOKBACK_DAYS + 1)} `;
+
+  try {
+    const [orbEvents, pmEvents, emaEvents, orbTrades, pmTrades, emaTrades] = await Promise.all([
+      sql`
+        SELECT id, ticker, trade_date, event_type, direction, breakout_level, created_at
+        FROM orb_event_log
+        WHERE trade_date >= ${since}
+        ORDER BY id DESC
+        LIMIT ${EVENT_LOG_LIMIT}
+      `,
+      sql`
+        SELECT id, ticker, trade_date, event_type, direction, breakout_level, created_at
+        FROM premarket_event_log
+        WHERE trade_date >= ${since}
+        ORDER BY id DESC
+        LIMIT ${EVENT_LOG_LIMIT}
+      `,
+      sql`
+        SELECT id, ticker, trade_date, event_type, direction, breakout_level, created_at
+        FROM emavwap_event_log
+        WHERE trade_date >= ${since}
+        ORDER BY id DESC
+        LIMIT ${EVENT_LOG_LIMIT}
+      `.catch(() => []),
+      sql`
+        SELECT id, ticker, direction, opened_at, closed_at, close_reason, realized_pnl, pnl_pct
+        FROM orb_trade_log
+        WHERE opened_at >= ${tradeSince}
+      `,
+      sql`
+        SELECT id, ticker, direction, opened_at, closed_at, close_reason, realized_pnl, pnl_pct
+        FROM premarket_trade_log
+        WHERE opened_at >= ${tradeSince}
+      `,
+      sql`
+        SELECT id, ticker, direction, opened_at, closed_at, close_reason, realized_pnl, pnl_pct
+        FROM emavwap_trade_log
+        WHERE opened_at >= ${tradeSince}
+      `.catch(() => []),
+    ]);
+
+    const events = [
+      ...orbEvents.map((row) => ({ ...rowToPlain(row), strategy: 'orb' })),
+      ...pmEvents.map((row) => ({ ...rowToPlain(row), strategy: 'premarket' })),
+      ...(emaEvents || []).map((row) => ({ ...rowToPlain(row), strategy: 'emavwap' })),
+    ];
+    const trades = [
+      ...orbTrades.map((row) => ({ ...rowToPlain(row), strategy: 'orb' })),
+      ...pmTrades.map((row) => ({ ...rowToPlain(row), strategy: 'premarket' })),
+      ...(emaTrades || []).map((row) => ({ ...rowToPlain(row), strategy: 'emavwap' })),
+    ];
+
+    return resolveEventOutcomes({ events, trades }).slice(0, EVENT_LOG_LIMIT);
+  } catch (err) {
+    console.warn('[handlers] breakout event log failed:', err.message);
+    return [];
+  }
+}
+
+function attachOutcomeToLastSignal(lastSignal, eventLog) {
+  if (!lastSignal || !eventLog?.length) return lastSignal;
+  const checked = String(lastSignal.checked_at || '');
+  const ticker = String(lastSignal.ticker || '').toUpperCase();
+  const match = eventLog.find(
+    (row) =>
+      String(row.ticker || '').toUpperCase() === ticker &&
+      String(row.created_at || '') === checked
+  );
+  if (!match) return lastSignal;
+  return {
+    ...lastSignal,
+    outcome: match.outcome,
+    outcome_label: match.outcome_label,
+    close_reason: match.close_reason,
+    realized_pnl: match.realized_pnl,
+    opened_at: match.opened_at,
+  };
+}
+
 function parseClosedAtEt(trade) {
   if (!trade?.closed_at) return null;
   const raw = String(trade.closed_at);
@@ -113,15 +221,7 @@ function positionCost(position) {
 }
 
 function tradePnlDollars(trade) {
-  // Never-opened closes must not contribute phantom dollar P&L even if exit_premium differs.
-  if (isNeverOpenedCloseReason(trade.close_reason)) return 0;
-  if (trade.realized_pnl != null && Number.isFinite(Number(trade.realized_pnl))) {
-    return Number(trade.realized_pnl);
-  }
-  const entry = Number(trade.entry_premium) || 0;
-  const exit = Number(trade.exit_premium) || 0;
-  const qty = Number(trade.quantity) || 1;
-  return (exit - entry) * 100 * qty;
+  return displayPnlDollars(trade);
 }
 
 function sumTradeLogPnlDollars(trades) {
@@ -243,7 +343,7 @@ function computeTickerWinRates(labeledTradeGroups, watchlist = []) {
 async function fetchAllSwingTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, close_reason, closed_at, opened_at, environment
     FROM trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -252,7 +352,7 @@ async function fetchAllSwingTradesForPnl() {
 async function fetchAllOrbTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason, closed_at, opened_at, environment
     FROM orb_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -261,7 +361,7 @@ async function fetchAllOrbTradesForPnl() {
 async function fetchAllPremarketTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason, closed_at, opened_at, environment
     FROM premarket_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -270,7 +370,7 @@ async function fetchAllPremarketTradesForPnl() {
 async function fetchAllEmaVwapTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason, closed_at, opened_at, environment
     FROM emavwap_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -315,11 +415,9 @@ function closedAtOnOrAfterHeadlineStart(trade) {
 }
 
 /**
- * Daily / Weekly: all strategies, no date floor (unchanged).
- * Monthly / All-Time: currently-live strategies only, closed_at >= HEADLINE_PNL_START_UTC.
- *
- * Live/paper is the *current* strategy-level flag (bot_state / emavwap_state), applied
- * retroactively to the date window — trade logs have no per-trade environment column.
+ * Headline cards: fills that were live when they happened, net of $1/contract
+ * Tastytrade opening commission. Demoting ORB/Premarket/EMA to paper does not
+ * drop earlier live closes. Later paper fills stay out.
  */
 export function computePerformance(trades, openPositions, environments = {}) {
   const todayKey = etDateKey();
@@ -335,11 +433,10 @@ export function computePerformance(trades, openPositions, environments = {}) {
   for (const trade of trades) {
     const closeKey = parseClosedAtEt(trade);
     if (!closeKey) continue;
+    if (!tradeCountsAsLiveBook(trade, liveKeys)) continue;
     const pnl = tradePnlDollars(trade);
     if (closeKey === todayKey) dailyPnl += pnl;
     if (closeKey >= weekStart) weeklyPnl += pnl;
-
-    if (!liveKeys.has(trade._strategy)) continue;
     if (!closedAtOnOrAfterHeadlineStart(trade)) continue;
     alltimePnl += pnl;
     if (closeKey.slice(0, 7) === monthKey) monthlyPnl += pnl;
@@ -357,14 +454,67 @@ export function computePerformance(trades, openPositions, environments = {}) {
   };
 }
 
-function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
-  const emptyWin = {
+function emptyWinStats() {
+  return {
     wins: 0,
     losses: 0,
     closed_trades: 0,
     win_rate_percent: null,
   };
-  const win = winStats || emptyWin;
+}
+
+function pickWinStats(stats) {
+  const win = stats || emptyWinStats();
+  return {
+    wins: win.wins || 0,
+    losses: win.losses || 0,
+    closed_trades: win.closed_trades || 0,
+    win_rate_percent: win.win_rate_percent ?? null,
+  };
+}
+
+function periodOutcomeStats(trades, maxBudget) {
+  const win = computeWinRateStats(trades);
+  const pnl = sumTradeLogPnlDollars(trades);
+  return {
+    ...win,
+    pnl,
+    roiPercent: computeRoiPercent(pnl, maxBudget),
+  };
+}
+
+function liveBookTradesForBudget(trades, strategy) {
+  const tagged = (trades || []).map((trade) => ({ ...trade, _strategy: strategy }));
+  return tagged.filter((trade) => tradeCountsAsLiveBook(trade, new Set()));
+}
+
+/** Same windows as computePerformance: week = Mon–now; month/all-time from Aug 14. */
+function budgetPeriodsForTrades(trades, strategy, maxBudget) {
+  const book = liveBookTradesForBudget(trades, strategy);
+  const weekStart = mondayOfWeekEt();
+  const monthKey = etMonthKey();
+  const weekly = book.filter((trade) => {
+    const closeKey = parseClosedAtEt(trade);
+    return Boolean(closeKey) && closeKey >= weekStart;
+  });
+  const monthly = book.filter((trade) => {
+    const closeKey = parseClosedAtEt(trade);
+    return Boolean(closeKey) && closeKey.slice(0, 7) === monthKey && closedAtOnOrAfterHeadlineStart(trade);
+  });
+  const alltime = book.filter(closedAtOnOrAfterHeadlineStart);
+  return {
+    weekly: periodOutcomeStats(weekly, maxBudget),
+    monthly: periodOutcomeStats(monthly, maxBudget),
+    alltime: periodOutcomeStats(alltime, maxBudget),
+  };
+}
+
+function toBudgetCard(snapshot, periods = {}) {
+  const emptyPeriod = { ...emptyWinStats(), pnl: 0, roiPercent: null };
+  const alltime = periods.alltime || emptyPeriod;
+  const weekly = periods.weekly || emptyPeriod;
+  const monthly = periods.monthly || emptyPeriod;
+  const alltimeWin = pickWinStats(alltime);
   if (!snapshot) {
     return {
       environment: 'paper',
@@ -372,7 +522,13 @@ function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
       spent: 0,
       remaining: 0,
       roiPercent: null,
-      ...emptyWin,
+      weekly_roi_percent: null,
+      monthly_roi_percent: null,
+      alltime_roi_percent: null,
+      ...alltimeWin,
+      weekly_win_rate: emptyWinStats(),
+      monthly_win_rate: emptyWinStats(),
+      alltime_win_rate: emptyWinStats(),
     };
   }
   const max = snapshot.max ?? snapshot.total_allocated ?? 0;
@@ -381,11 +537,14 @@ function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
     max,
     spent: snapshot.spent ?? 0,
     remaining: snapshot.remaining ?? 0,
-    roiPercent: computeRoiPercent(allTimePnlDollars, max),
-    wins: win.wins,
-    losses: win.losses,
-    closed_trades: win.closed_trades,
-    win_rate_percent: win.win_rate_percent,
+    roiPercent: alltime.roiPercent ?? null,
+    weekly_roi_percent: weekly.roiPercent ?? null,
+    monthly_roi_percent: monthly.roiPercent ?? null,
+    alltime_roi_percent: alltime.roiPercent ?? null,
+    ...alltimeWin,
+    weekly_win_rate: pickWinStats(weekly),
+    monthly_win_rate: pickWinStats(monthly),
+    alltime_win_rate: alltimeWin,
   };
 }
 
@@ -398,11 +557,6 @@ async function computeAllStrategyBudgets(watchlist = []) {
     fetchAllEmaVwapTradesForPnl(),
   ]);
 
-  const swingPnl = sumTradeLogPnlDollars(swingTrades);
-  const orbPnl = sumTradeLogPnlDollars(orbTrades);
-  const premarketPnl = sumTradeLogPnlDollars(premarketTrades);
-  const emaVwapPnl = sumTradeLogPnlDollars(emaVwapTrades);
-
   const ticker_win_rates = computeTickerWinRates(
     [
       { strategy: 'swing', trades: swingTrades },
@@ -413,18 +567,21 @@ async function computeAllStrategyBudgets(watchlist = []) {
     watchlist
   );
 
+  const swingMax = budgets.swing_budget?.max ?? budgets.swing_budget?.total_allocated ?? 0;
+  const orbMax = budgets.orb_budget?.max ?? budgets.orb_budget?.total_allocated ?? 0;
+  const premarketMax = budgets.premarket_budget?.max ?? budgets.premarket_budget?.total_allocated ?? 0;
+  const emaVwapMax = budgets.emavwap_budget?.max ?? budgets.emavwap_budget?.total_allocated ?? 0;
+
   return {
-    swing_budget: toBudgetCard(budgets.swing_budget, swingPnl, computeWinRateStats(swingTrades)),
-    orb_budget: toBudgetCard(budgets.orb_budget, orbPnl, computeWinRateStats(orbTrades)),
+    swing_budget: toBudgetCard(budgets.swing_budget, budgetPeriodsForTrades(swingTrades, 'swing', swingMax)),
+    orb_budget: toBudgetCard(budgets.orb_budget, budgetPeriodsForTrades(orbTrades, 'orb', orbMax)),
     premarket_budget: toBudgetCard(
       budgets.premarket_budget,
-      premarketPnl,
-      computeWinRateStats(premarketTrades)
+      budgetPeriodsForTrades(premarketTrades, 'premarket', premarketMax)
     ),
     emavwap_budget: toBudgetCard(
       budgets.emavwap_budget,
-      emaVwapPnl,
-      computeWinRateStats(emaVwapTrades)
+      budgetPeriodsForTrades(emaVwapTrades, 'emavwap', emaVwapMax)
     ),
     ticker_win_rates,
   };
@@ -503,6 +660,10 @@ function mapTradeLogEntry(trade, strategyOverride) {
     strike: trade.strike,
     expiration: trade.expiration,
     closed_at: trade.closed_at,
+    opened_at: trade.opened_at,
+    realized_pnl: trade.realized_pnl,
+    contracts: trade.quantity ?? trade.entry_contracts ?? trade.contracts ?? null,
+    environment: trade.environment || null,
   };
 }
 
@@ -633,22 +794,35 @@ export async function buildStatusResponse() {
 
   const liveKeys = liveStrategyKeys(environments);
   const tradeLog = allTrades
-    .filter((trade) => liveKeys.has(trade._strategy))
+    .filter((trade) => tradeCountsAsLiveBook(trade, liveKeys))
     .slice(0, TRADE_LOG_LIMIT)
     .map((trade) => mapTradeLogEntry(trade, trade._strategy));
 
-  const lastSignal = await getLastSignal();
+  const lastSignalRaw = await getLastSignal();
+  const breakoutEventLog = await fetchBreakoutEventLog();
+  const lastSignal = attachOutcomeToLastSignal(lastSignalRaw, breakoutEventLog);
   const watchlist = getWatchlist();
   const scanResults = getLastScanResults();
 
   const swingMode = state.swing_mode || state.execution_mode || 'AUTO';
   const orbMode = state.orb_mode || 'AUTO';
   const premarketMode = state.premarket_mode || 'AUTO';
-  const [budgets, orbStatus] = await Promise.all([
+  const [budgets, orbStatus, swingAll, orbAll, premarketAll, emaAll] = await Promise.all([
     computeAllStrategyBudgets(watchlist),
     buildOrbStatus(scanResults),
+    fetchAllSwingTradesForPnl(),
+    fetchAllOrbTradesForPnl(),
+    fetchAllPremarketTradesForPnl(),
+    fetchAllEmaVwapTradesForPnl(),
   ]);
   const swingBudget = budgets.swing_budget;
+  const calendarTrades = [
+    ...swingAll.map((t) => ({ ...t, _strategy: 'swing' })),
+    ...orbAll.map((t) => ({ ...t, _strategy: 'orb' })),
+    ...premarketAll.map((t) => ({ ...t, _strategy: 'premarket' })),
+    ...emaAll.map((t) => ({ ...t, _strategy: 'emavwap' })),
+  ];
+  const dailyPnlByKey = await buildPersistedDailyPnlByKey(calendarTrades, environments, true);
 
   const openPositions = [
     ...rawSwingPositions.map((p) => mapOpenPosition(p, 'swing')),
@@ -658,7 +832,7 @@ export async function buildStatusResponse() {
   ];
 
   const performance = computePerformance(
-    allTrades,
+    calendarTrades,
     [
       ...rawSwingPositions,
       ...orbPositions,
@@ -688,6 +862,7 @@ export async function buildStatusResponse() {
     budget_remaining: swingBudget.remaining,
     max_budget: swingBudget.max,
     performance,
+    daily_pnl_by_key: dailyPnlByKey,
     swing_budget: budgets.swing_budget,
     orb_budget: budgets.orb_budget,
     premarket_budget: budgets.premarket_budget,
@@ -697,6 +872,7 @@ export async function buildStatusResponse() {
     watchlist,
     watchlist_count: watchlist.length,
     last_signal_checked: lastSignal,
+    breakout_event_log: breakoutEventLog,
     open_positions: openPositions,
     trade_log: tradeLog,
     server_time: new Date().toISOString(),
@@ -726,6 +902,18 @@ export async function switchExecutionMode(input, strategyArg) {
   }
   if (!['swing', 'orb', 'premarket'].includes(strategy)) {
     throw new Error('Strategy must be swing, orb, or premarket');
+  }
+
+  if (mode === 'AUTO') {
+    const halt = await getScheduledTradingHalt();
+    if (halt.active) {
+      throw new Error(
+        `Scheduled trading halt until ${halt.resumeAtEt} — AUTO is blocked`
+      );
+    }
+    if (strategy === 'orb' && !ORB_ENTRIES_ENABLED) {
+      throw new Error('ORB entries are disabled — live and paper orders are off');
+    }
   }
 
   const sql = getSql();

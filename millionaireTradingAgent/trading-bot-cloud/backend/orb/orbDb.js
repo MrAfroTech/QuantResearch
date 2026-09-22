@@ -1,6 +1,7 @@
 import { getSql } from '../sqlClient.js';
 import { ladderExitPhase } from '../ladder/ladderConfig.js';
 import { computeRealizedPnlDollars } from '../tradePnl.js';
+import { readStrategyEnvironmentForLog } from '../tradeLogEnvironment.js';
 
 let schemaReady;
 
@@ -113,9 +114,14 @@ export async function ensureOrbSchema() {
     await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
     await sql`ALTER TABLE orb_trade_log ADD COLUMN IF NOT EXISTS entry_contracts INTEGER`;
     await sql`ALTER TABLE orb_trade_log ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
+    // live|paper at insert time. NULL = pre-deploy unknown. No backfill.
+    await sql`ALTER TABLE orb_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
     await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS broker_stop_order_id TEXT`;
     await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS broker_stop_trigger_price DOUBLE PRECISION`;
     await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS broker_stop_pnl_frac DOUBLE PRECISION`;
+    await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS pending_close_order_id TEXT`;
+    await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS pending_close_reason TEXT`;
+    await sql`ALTER TABLE orb_positions ADD COLUMN IF NOT EXISTS pending_close_submitted_at TEXT`;
 
     const month = new Date().toISOString().slice(0, 7);
     const existing = await sql`SELECT id FROM orb_bot_state WHERE id = 1`;
@@ -309,6 +315,19 @@ export async function updateOrbPositionBrokerStop(id, state) {
   `;
 }
 
+export async function updateOrbPositionPendingClose(id, state) {
+  await ensureOrbSchema();
+  const sql = getSql();
+  await sql`
+    UPDATE orb_positions
+    SET
+      pending_close_order_id = ${state.pending_close_order_id ?? null},
+      pending_close_reason = ${state.pending_close_reason ?? null},
+      pending_close_submitted_at = ${state.pending_close_submitted_at ?? null}
+    WHERE id = ${id}
+  `;
+}
+
 async function insertOrbTradeLogLeg(tx, position, exitPremium, pnlPct, reason, legQty) {
   const realizedPnl = computeRealizedPnlDollars({
     entryPremium: position.entry_premium,
@@ -317,12 +336,14 @@ async function insertOrbTradeLogLeg(tx, position, exitPremium, pnlPct, reason, l
     closeReason: reason,
   });
 
+  const environment = await readStrategyEnvironmentForLog('orb', tx);
   await tx`
     INSERT INTO orb_trade_log (
       ticker, direction, strike, expiration, entry_premium, exit_premium, quantity,
       pnl_pct, realized_pnl, opening_range_high, opening_range_low, breakout_level,
       breakout_direction, confirmation_candles_json, strike_bucket, entry_iv, entry_delta,
-      mfe_pct, mae_pct, close_reason, opened_at, closed_at, entry_contracts, pyramid_tier
+      mfe_pct, mae_pct, close_reason, opened_at, closed_at, entry_contracts, pyramid_tier,
+      environment
     )
     VALUES (
       ${position.ticker},
@@ -348,7 +369,8 @@ async function insertOrbTradeLogLeg(tx, position, exitPremium, pnlPct, reason, l
       ${position.opened_at},
       NOW()::text,
       ${position.entry_contracts ?? position.quantity},
-      ${position.pyramid_tier ?? null}
+      ${position.pyramid_tier ?? null},
+      ${environment}
     )
   `;
 }
@@ -382,12 +404,20 @@ export async function partialCloseOrbPosition(id, exitPremium, pnlPct, reason, c
   return position;
 }
 
+/** True when UPDATE … AND status = 'OPEN' claimed the row. */
+export function orbCloseUpdateClaimed(updated) {
+  const count = Number(updated?.count);
+  if (Number.isFinite(count)) return count > 0;
+  return Array.isArray(updated) && updated.length > 0;
+}
+
 export async function closeOrbPosition(id, exitPremium, pnlPct, reason, closeQty = null) {
   await ensureOrbSchema();
   const sql = getSql();
   const posRows = await sql`SELECT * FROM orb_positions WHERE id = ${id}`;
   const position = rowToObject(posRows[0]);
   if (!position) return null;
+  if (String(position.status || '').toUpperCase() === 'CLOSED') return null;
 
   const legQty = closeQty ?? position.quantity;
   const exitFrac = Number(pnlPct) / 100;
@@ -396,12 +426,20 @@ export async function closeOrbPosition(id, exitPremium, pnlPct, reason, closeQty
   position.mfe_pct = mfePct;
   position.mae_pct = maePct;
 
+  let claimed = false;
   await sql.begin(async (tx) => {
-    await tx`UPDATE orb_positions SET status = 'CLOSED' WHERE id = ${id}`;
+    const updated = await tx`
+      UPDATE orb_positions
+      SET status = 'CLOSED'
+      WHERE id = ${id} AND status = 'OPEN'
+      RETURNING id
+    `;
+    if (!orbCloseUpdateClaimed(updated)) return;
     await insertOrbTradeLogLeg(tx, position, exitPremium, pnlPct, reason, legQty);
+    claimed = true;
   });
 
-  return position;
+  return claimed ? position : null;
 }
 
 export async function logOrbEvent({ ticker, tradeDate, eventType, direction, breakoutLevel, details }) {
@@ -421,7 +459,7 @@ export async function logOrbEvent({ ticker, tradeDate, eventType, direction, bre
   `;
 }
 
-/** True if any position or trade log row exists for this breakout key today. */
+/** True only while a filled position for this breakout key is still OPEN. */
 export async function hasOrbBreakoutExecutedToday({
   ticker,
   direction,
@@ -438,17 +476,28 @@ export async function hasOrbBreakoutExecutedToday({
       AND direction = ${direction}
       AND breakout_level = ${level}
       AND expiration = ${tradeDate}
+      AND status = 'OPEN'
     LIMIT 1
   `;
-  if (posRow) return true;
+  return Boolean(posRow);
+}
 
-  const [logRow] = await sql`
-    SELECT 1 FROM orb_trade_log
+export async function listOrbBreakoutCloseOutcomes({ ticker, tradeDate }) {
+  await ensureOrbSchema();
+  const sql = getSql();
+  const rows = await sql`
+    SELECT direction, breakout_level, opened_at, closed_at, realized_pnl
+    FROM orb_trade_log
     WHERE ticker = ${ticker}
-      AND direction = ${direction}
-      AND breakout_level = ${level}
       AND expiration = ${tradeDate}
-    LIMIT 1
+      AND COALESCE(close_reason, '') NOT IN ('entry_unfilled_cancelled', 'entry_never_filled')
+    ORDER BY closed_at ASC
   `;
-  return Boolean(logRow);
+  return rows.map((row) => ({
+    direction: row.direction,
+    breakout_level: row.breakout_level,
+    opened_at: row.opened_at,
+    closed_at: row.closed_at,
+    realized_pnl: row.realized_pnl,
+  }));
 }

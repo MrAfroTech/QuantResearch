@@ -30,6 +30,7 @@ import {
 import { getAllBudgetAllocations } from './budget/budgetAllocations.js';
 import { runExpiredPositionSweep } from './budget/expiredPositionSweep.js';
 import { etDateKey } from './orb/tradierTimesales.js';
+import { getDxlinkShadowDashboard } from './marketData/dxlinkShadowDashboard.js';
 
 const app = express();
 
@@ -66,6 +67,24 @@ app.get('/api/health', (req, res) => {
     railway: isRailway(),
     public_url: getPublicBaseUrl(),
   });
+});
+
+app.get('/api/dxlink-shadow', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const window = req.query.window === 'week' ? 'week' : 'today';
+    res.json(await getDxlinkShadowDashboard({ window }));
+  } catch (err) {
+    res.status(500).json({
+      observational: true,
+      not_used_for_trading: true,
+      error: err.message,
+      bars: [],
+      detections: [],
+      bar_match: { comparable: 0, matched: 0, match_rate: null },
+      detection_latency: { count: 0, empty: true },
+    });
+  }
 });
 
 app.get('/api/diagnostics/health', async (req, res) => {
@@ -220,7 +239,7 @@ app.use((req, res) => {
   res.status(404).json({
     error: 'Not found',
     hint: 'This host is the API server. Use the Vercel dashboard URL for the UI.',
-    endpoints: ['/api/health', '/api/diagnostics/health', '/api/status', '/api/mode', '/api/scan', '/api/analytics/run-diagnosis', '/api/analytics/suggestions', '/api/analytics/run-scoring', '/api/analytics/trade-scores', '/api/analytics/scoring-status', '/api/budget/allocations', '/api/budget/expired-sweep', '/api/telegram/webhook'],
+    endpoints: ['/api/health', '/api/diagnostics/health', '/api/status', '/api/dxlink-shadow', '/api/mode', '/api/scan', '/api/analytics/run-diagnosis', '/api/analytics/suggestions', '/api/analytics/run-scoring', '/api/analytics/trade-scores', '/api/analytics/scoring-status', '/api/budget/allocations', '/api/budget/expired-sweep', '/api/telegram/webhook'],
   });
 });
 
