@@ -18,6 +18,7 @@ import {
   DASHBOARD_CONTROLS_DISABLED_MESSAGE,
 } from './config.js';
 import { buildDiagnosticsHealthReport } from './diagnostics/healthCheck.js';
+import { buildRiskConfigSnapshot } from './diagnostics/riskConfig.js';
 import { runPollCycle } from './scheduler.js';
 import { runDailyDiagnosis, listSuggestions } from './analytics/runDiagnosis.js';
 import {
@@ -91,6 +92,15 @@ app.get('/api/diagnostics/health', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     res.json(await buildDiagnosticsHealthReport());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/diagnostics/risk-config', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(buildRiskConfigSnapshot());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -239,7 +249,7 @@ app.use((req, res) => {
   res.status(404).json({
     error: 'Not found',
     hint: 'This host is the API server. Use the Vercel dashboard URL for the UI.',
-    endpoints: ['/api/health', '/api/diagnostics/health', '/api/status', '/api/dxlink-shadow', '/api/mode', '/api/scan', '/api/analytics/run-diagnosis', '/api/analytics/suggestions', '/api/analytics/run-scoring', '/api/analytics/trade-scores', '/api/analytics/scoring-status', '/api/budget/allocations', '/api/budget/expired-sweep', '/api/telegram/webhook'],
+    endpoints: ['/api/health', '/api/diagnostics/health', '/api/diagnostics/risk-config', '/api/status', '/api/dxlink-shadow', '/api/mode', '/api/scan', '/api/analytics/run-diagnosis', '/api/analytics/suggestions', '/api/analytics/run-scoring', '/api/analytics/trade-scores', '/api/analytics/scoring-status', '/api/budget/allocations', '/api/budget/expired-sweep', '/api/telegram/webhook'],
   });
 });
 
