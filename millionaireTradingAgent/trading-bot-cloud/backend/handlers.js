@@ -22,7 +22,11 @@ import {
   getAllStrategyEnvironments,
   setStrategyEnvironment,
 } from './strategyEnvironment.js';
-import { isNeverOpenedCloseReason } from './tradePnl.js';
+import { displayPnlDollars, isNeverOpenedCloseReason } from './tradePnl.js';
+import {
+  buildPersistedDailyPnlByKey,
+  tradeCountsAsLiveBook,
+} from './budget/dailyPnlCalendar.js';
 
 const ORB_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
 const TRADE_LOG_LIMIT = 40;
@@ -36,6 +40,10 @@ async function ensureHandlerSchema() {
     await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS swing_mode TEXT DEFAULT 'AUTO'`;
     await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS orb_mode TEXT DEFAULT 'AUTO'`;
     await sql`ALTER TABLE bot_state ADD COLUMN IF NOT EXISTS premarket_mode TEXT DEFAULT 'AUTO'`;
+    await sql`ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
+    await sql`ALTER TABLE orb_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
+    await sql`ALTER TABLE premarket_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
+    await sql`ALTER TABLE emavwap_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
   })();
   return schemaReady;
 }
@@ -113,15 +121,7 @@ function positionCost(position) {
 }
 
 function tradePnlDollars(trade) {
-  // Never-opened closes must not contribute phantom dollar P&L even if exit_premium differs.
-  if (isNeverOpenedCloseReason(trade.close_reason)) return 0;
-  if (trade.realized_pnl != null && Number.isFinite(Number(trade.realized_pnl))) {
-    return Number(trade.realized_pnl);
-  }
-  const entry = Number(trade.entry_premium) || 0;
-  const exit = Number(trade.exit_premium) || 0;
-  const qty = Number(trade.quantity) || 1;
-  return (exit - entry) * 100 * qty;
+  return displayPnlDollars(trade);
 }
 
 function sumTradeLogPnlDollars(trades) {
@@ -243,7 +243,7 @@ function computeTickerWinRates(labeledTradeGroups, watchlist = []) {
 async function fetchAllSwingTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, close_reason, closed_at, opened_at, environment
     FROM trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -252,7 +252,7 @@ async function fetchAllSwingTradesForPnl() {
 async function fetchAllOrbTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason, closed_at, opened_at, environment
     FROM orb_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -261,7 +261,7 @@ async function fetchAllOrbTradesForPnl() {
 async function fetchAllPremarketTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason, closed_at, opened_at, environment
     FROM premarket_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -270,7 +270,7 @@ async function fetchAllPremarketTradesForPnl() {
 async function fetchAllEmaVwapTradesForPnl() {
   const sql = getSql();
   const rows = await sql`
-    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason
+    SELECT ticker, entry_premium, exit_premium, quantity, realized_pnl, close_reason, closed_at, opened_at, environment
     FROM emavwap_trade_log
   `;
   return rows.map((row) => Object.fromEntries(Object.entries(row)));
@@ -315,11 +315,9 @@ function closedAtOnOrAfterHeadlineStart(trade) {
 }
 
 /**
- * Daily / Weekly: all strategies, no date floor (unchanged).
- * Monthly / All-Time: currently-live strategies only, closed_at >= HEADLINE_PNL_START_UTC.
- *
- * Live/paper is the *current* strategy-level flag (bot_state / emavwap_state), applied
- * retroactively to the date window — trade logs have no per-trade environment column.
+ * Headline cards: fills that were live when they happened, net of $1/contract
+ * Tastytrade opening commission. Demoting ORB/Premarket/EMA to paper does not
+ * drop earlier live closes. Later paper fills stay out.
  */
 export function computePerformance(trades, openPositions, environments = {}) {
   const todayKey = etDateKey();
@@ -335,11 +333,10 @@ export function computePerformance(trades, openPositions, environments = {}) {
   for (const trade of trades) {
     const closeKey = parseClosedAtEt(trade);
     if (!closeKey) continue;
+    if (!tradeCountsAsLiveBook(trade, liveKeys)) continue;
     const pnl = tradePnlDollars(trade);
     if (closeKey === todayKey) dailyPnl += pnl;
     if (closeKey >= weekStart) weeklyPnl += pnl;
-
-    if (!liveKeys.has(trade._strategy)) continue;
     if (!closedAtOnOrAfterHeadlineStart(trade)) continue;
     alltimePnl += pnl;
     if (closeKey.slice(0, 7) === monthKey) monthlyPnl += pnl;
@@ -503,6 +500,10 @@ function mapTradeLogEntry(trade, strategyOverride) {
     strike: trade.strike,
     expiration: trade.expiration,
     closed_at: trade.closed_at,
+    opened_at: trade.opened_at,
+    realized_pnl: trade.realized_pnl,
+    contracts: trade.quantity ?? trade.entry_contracts ?? trade.contracts ?? null,
+    environment: trade.environment || null,
   };
 }
 
@@ -633,7 +634,7 @@ export async function buildStatusResponse() {
 
   const liveKeys = liveStrategyKeys(environments);
   const tradeLog = allTrades
-    .filter((trade) => liveKeys.has(trade._strategy))
+    .filter((trade) => tradeCountsAsLiveBook(trade, liveKeys))
     .slice(0, TRADE_LOG_LIMIT)
     .map((trade) => mapTradeLogEntry(trade, trade._strategy));
 
@@ -644,11 +645,22 @@ export async function buildStatusResponse() {
   const swingMode = state.swing_mode || state.execution_mode || 'AUTO';
   const orbMode = state.orb_mode || 'AUTO';
   const premarketMode = state.premarket_mode || 'AUTO';
-  const [budgets, orbStatus] = await Promise.all([
+  const [budgets, orbStatus, swingAll, orbAll, premarketAll, emaAll] = await Promise.all([
     computeAllStrategyBudgets(watchlist),
     buildOrbStatus(scanResults),
+    fetchAllSwingTradesForPnl(),
+    fetchAllOrbTradesForPnl(),
+    fetchAllPremarketTradesForPnl(),
+    fetchAllEmaVwapTradesForPnl(),
   ]);
   const swingBudget = budgets.swing_budget;
+  const calendarTrades = [
+    ...swingAll.map((t) => ({ ...t, _strategy: 'swing' })),
+    ...orbAll.map((t) => ({ ...t, _strategy: 'orb' })),
+    ...premarketAll.map((t) => ({ ...t, _strategy: 'premarket' })),
+    ...emaAll.map((t) => ({ ...t, _strategy: 'emavwap' })),
+  ];
+  const dailyPnlByKey = await buildPersistedDailyPnlByKey(calendarTrades, environments, true);
 
   const openPositions = [
     ...rawSwingPositions.map((p) => mapOpenPosition(p, 'swing')),
@@ -658,7 +670,7 @@ export async function buildStatusResponse() {
   ];
 
   const performance = computePerformance(
-    allTrades,
+    calendarTrades,
     [
       ...rawSwingPositions,
       ...orbPositions,
@@ -688,6 +700,7 @@ export async function buildStatusResponse() {
     budget_remaining: swingBudget.remaining,
     max_budget: swingBudget.max,
     performance,
+    daily_pnl_by_key: dailyPnlByKey,
     swing_budget: budgets.swing_budget,
     orb_budget: budgets.orb_budget,
     premarket_budget: budgets.premarket_budget,
