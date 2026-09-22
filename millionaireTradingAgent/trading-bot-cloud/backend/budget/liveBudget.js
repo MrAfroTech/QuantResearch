@@ -2,6 +2,9 @@ import { getAllStrategyEnvironments } from '../strategyEnvironment.js';
 
 const LIVE_STRATEGY_KEYS = ['swing', 'orb', 'premarket', 'emavwap'];
 
+/** Each live strategy max is 70% of account cash (not an equal split). */
+export const LIVE_BUDGET_MAX_FRAC = 0.7;
+
 let cache = {
   cashBalance: null,
   liveStrategies: [],
@@ -9,11 +12,15 @@ let cache = {
   updatedAt: null,
 };
 
+export function computeLiveBudgetMax(cashBalance) {
+  const cash = Number(cashBalance);
+  if (!Number.isFinite(cash) || cash <= 0) return 0;
+  return cash * LIVE_BUDGET_MAX_FRAC;
+}
+
 export function computeLivePerStrategyBudget(cashBalance, liveStrategyCount) {
   if (!liveStrategyCount || liveStrategyCount <= 0) return 0;
-  const balance = Number(cashBalance);
-  if (!Number.isFinite(balance) || balance <= 0) return 0;
-  return balance / liveStrategyCount;
+  return computeLiveBudgetMax(cashBalance);
 }
 
 export async function getLiveStrategyKeys() {
@@ -23,7 +30,7 @@ export async function getLiveStrategyKeys() {
 
 export function updateLiveBudgetCache({ cashBalance, liveStrategies }) {
   const perStrategyBudget = {};
-  const perStrategy = computeLivePerStrategyBudget(cashBalance, liveStrategies.length);
+  const perStrategy = computeLiveBudgetMax(cashBalance);
   for (const strategy of liveStrategies) {
     perStrategyBudget[strategy] = perStrategy;
   }
@@ -64,5 +71,5 @@ export async function getLiveBudgetTotal(strategy) {
   if (cache.perStrategyBudget[strategy] != null) {
     return cache.perStrategyBudget[strategy];
   }
-  return computeLivePerStrategyBudget(cache.cashBalance, liveStrategies.length);
+  return computeLiveBudgetMax(cache.cashBalance);
 }

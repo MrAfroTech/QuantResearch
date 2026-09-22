@@ -354,14 +354,67 @@ export function computePerformance(trades, openPositions, environments = {}) {
   };
 }
 
-function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
-  const emptyWin = {
+function emptyWinStats() {
+  return {
     wins: 0,
     losses: 0,
     closed_trades: 0,
     win_rate_percent: null,
   };
-  const win = winStats || emptyWin;
+}
+
+function pickWinStats(stats) {
+  const win = stats || emptyWinStats();
+  return {
+    wins: win.wins || 0,
+    losses: win.losses || 0,
+    closed_trades: win.closed_trades || 0,
+    win_rate_percent: win.win_rate_percent ?? null,
+  };
+}
+
+function periodOutcomeStats(trades, maxBudget) {
+  const win = computeWinRateStats(trades);
+  const pnl = sumTradeLogPnlDollars(trades);
+  return {
+    ...win,
+    pnl,
+    roiPercent: computeRoiPercent(pnl, maxBudget),
+  };
+}
+
+function liveBookTradesForBudget(trades, strategy) {
+  const tagged = (trades || []).map((trade) => ({ ...trade, _strategy: strategy }));
+  return tagged.filter((trade) => tradeCountsAsLiveBook(trade, new Set()));
+}
+
+/** Same windows as computePerformance: week = Mon–now; month/all-time from Aug 14. */
+function budgetPeriodsForTrades(trades, strategy, maxBudget) {
+  const book = liveBookTradesForBudget(trades, strategy);
+  const weekStart = mondayOfWeekEt();
+  const monthKey = etMonthKey();
+  const weekly = book.filter((trade) => {
+    const closeKey = parseClosedAtEt(trade);
+    return Boolean(closeKey) && closeKey >= weekStart;
+  });
+  const monthly = book.filter((trade) => {
+    const closeKey = parseClosedAtEt(trade);
+    return Boolean(closeKey) && closeKey.slice(0, 7) === monthKey && closedAtOnOrAfterHeadlineStart(trade);
+  });
+  const alltime = book.filter(closedAtOnOrAfterHeadlineStart);
+  return {
+    weekly: periodOutcomeStats(weekly, maxBudget),
+    monthly: periodOutcomeStats(monthly, maxBudget),
+    alltime: periodOutcomeStats(alltime, maxBudget),
+  };
+}
+
+function toBudgetCard(snapshot, periods = {}) {
+  const emptyPeriod = { ...emptyWinStats(), pnl: 0, roiPercent: null };
+  const alltime = periods.alltime || emptyPeriod;
+  const weekly = periods.weekly || emptyPeriod;
+  const monthly = periods.monthly || emptyPeriod;
+  const alltimeWin = pickWinStats(alltime);
   if (!snapshot) {
     return {
       environment: 'paper',
@@ -369,7 +422,13 @@ function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
       spent: 0,
       remaining: 0,
       roiPercent: null,
-      ...emptyWin,
+      weekly_roi_percent: null,
+      monthly_roi_percent: null,
+      alltime_roi_percent: null,
+      ...alltimeWin,
+      weekly_win_rate: emptyWinStats(),
+      monthly_win_rate: emptyWinStats(),
+      alltime_win_rate: emptyWinStats(),
     };
   }
   const max = snapshot.max ?? snapshot.total_allocated ?? 0;
@@ -378,11 +437,14 @@ function toBudgetCard(snapshot, allTimePnlDollars = null, winStats = null) {
     max,
     spent: snapshot.spent ?? 0,
     remaining: snapshot.remaining ?? 0,
-    roiPercent: computeRoiPercent(allTimePnlDollars, max),
-    wins: win.wins,
-    losses: win.losses,
-    closed_trades: win.closed_trades,
-    win_rate_percent: win.win_rate_percent,
+    roiPercent: alltime.roiPercent ?? null,
+    weekly_roi_percent: weekly.roiPercent ?? null,
+    monthly_roi_percent: monthly.roiPercent ?? null,
+    alltime_roi_percent: alltime.roiPercent ?? null,
+    ...alltimeWin,
+    weekly_win_rate: pickWinStats(weekly),
+    monthly_win_rate: pickWinStats(monthly),
+    alltime_win_rate: alltimeWin,
   };
 }
 
@@ -395,11 +457,6 @@ async function computeAllStrategyBudgets(watchlist = []) {
     fetchAllEmaVwapTradesForPnl(),
   ]);
 
-  const swingPnl = sumTradeLogPnlDollars(swingTrades);
-  const orbPnl = sumTradeLogPnlDollars(orbTrades);
-  const premarketPnl = sumTradeLogPnlDollars(premarketTrades);
-  const emaVwapPnl = sumTradeLogPnlDollars(emaVwapTrades);
-
   const ticker_win_rates = computeTickerWinRates(
     [
       { strategy: 'swing', trades: swingTrades },
@@ -410,18 +467,21 @@ async function computeAllStrategyBudgets(watchlist = []) {
     watchlist
   );
 
+  const swingMax = budgets.swing_budget?.max ?? budgets.swing_budget?.total_allocated ?? 0;
+  const orbMax = budgets.orb_budget?.max ?? budgets.orb_budget?.total_allocated ?? 0;
+  const premarketMax = budgets.premarket_budget?.max ?? budgets.premarket_budget?.total_allocated ?? 0;
+  const emaVwapMax = budgets.emavwap_budget?.max ?? budgets.emavwap_budget?.total_allocated ?? 0;
+
   return {
-    swing_budget: toBudgetCard(budgets.swing_budget, swingPnl, computeWinRateStats(swingTrades)),
-    orb_budget: toBudgetCard(budgets.orb_budget, orbPnl, computeWinRateStats(orbTrades)),
+    swing_budget: toBudgetCard(budgets.swing_budget, budgetPeriodsForTrades(swingTrades, 'swing', swingMax)),
+    orb_budget: toBudgetCard(budgets.orb_budget, budgetPeriodsForTrades(orbTrades, 'orb', orbMax)),
     premarket_budget: toBudgetCard(
       budgets.premarket_budget,
-      premarketPnl,
-      computeWinRateStats(premarketTrades)
+      budgetPeriodsForTrades(premarketTrades, 'premarket', premarketMax)
     ),
     emavwap_budget: toBudgetCard(
       budgets.emavwap_budget,
-      emaVwapPnl,
-      computeWinRateStats(emaVwapTrades)
+      budgetPeriodsForTrades(emaVwapTrades, 'emavwap', emaVwapMax)
     ),
     ticker_win_rates,
   };
