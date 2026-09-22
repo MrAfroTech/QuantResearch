@@ -4,6 +4,8 @@
  */
 import { getSql } from '../sqlClient.js';
 import { etDateKey, getEtParts } from '../orb/tradierTimesales.js';
+import { parseShadowPrice } from './dxlinkShadowPrices.js';
+import { refreshShadowTradierTimesales, lookupShadowTradierClose } from './dxlinkShadowTradier.js';
 
 export const DXLINK_SHADOW_CLOSE_TOLERANCE = 0.03;
 export const DXLINK_SHADOW_BAR_LIMIT = 80;
@@ -33,15 +35,9 @@ export function etWindowStartDate(windowKey, now = new Date()) {
   return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
 }
 
-function parseClose(value) {
-  if (value == null || value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
 export function classifyCloseMatch(dxlinkClose, tradierClose, tolerance = DXLINK_SHADOW_CLOSE_TOLERANCE) {
-  const d = parseClose(dxlinkClose);
-  const t = parseClose(tradierClose);
+  const d = parseShadowPrice(dxlinkClose);
+  const t = parseShadowPrice(tradierClose);
   if (d == null || t == null) {
     return { comparable: false, matched: false, diff: null };
   }
@@ -117,9 +113,31 @@ function emptyPayload(windowKey, sinceDate) {
   };
 }
 
-function toFiniteOrNull(value) {
+function toNullableNumber(value) {
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function overlayTradierClose(row) {
+  const dxlink = parseShadowPrice(row.dxlink_close);
+  const stored = parseShadowPrice(row.tradier_close);
+  if (stored != null) {
+    return { tradier_close: stored, tradier_source: 'underlying_bars', reason: null };
+  }
+  const live = lookupShadowTradierClose(row.ticker, row.bar_time);
+  if (live?.close != null) {
+    return {
+      tradier_close: live.close,
+      tradier_source: 'tradier_timesales',
+      reason: null,
+    };
+  }
+  return {
+    tradier_close: null,
+    tradier_source: null,
+    reason: dxlink != null ? 'tradier_row_not_persisted_yet' : null,
+  };
 }
 
 export async function getDxlinkShadowDashboard({ window: windowKey = 'today' } = {}) {
@@ -141,11 +159,12 @@ export async function getDxlinkShadowDashboard({ window: windowKey = 'today' } =
         SELECT
           COUNT(*)::int AS total,
           COUNT(*) FILTER (
-            WHERE dxlink_close IS NOT NULL AND tradier_close IS NOT NULL
+            WHERE dxlink_close IS NOT NULL AND dxlink_close <> 0
+              AND tradier_close IS NOT NULL AND tradier_close <> 0
           )::int AS comparable,
           COUNT(*) FILTER (
-            WHERE dxlink_close IS NOT NULL
-              AND tradier_close IS NOT NULL
+            WHERE dxlink_close IS NOT NULL AND dxlink_close <> 0
+              AND tradier_close IS NOT NULL AND tradier_close <> 0
               AND ABS(dxlink_close - tradier_close) <= ${DXLINK_SHADOW_CLOSE_TOLERANCE}
           )::int AS matched
         FROM dxlink_shadow_bars
@@ -182,35 +201,47 @@ export async function getDxlinkShadowDashboard({ window: windowKey = 'today' } =
     ]);
 
     const barStats = barStatsRows[0] || {};
-    const comparable = Number(barStats.comparable) || 0;
-    const matched = Number(barStats.matched) || 0;
-    const total = Number(barStats.total) || 0;
     const detStats = detectionStatsRows[0] || {};
     const detectionCount = Number(detStats.count) || 0;
 
+    const missingTradier = (bars || []).some(
+      (row) => parseShadowPrice(row.dxlink_close) != null && parseShadowPrice(row.tradier_close) == null
+    );
+    if (missingTradier) {
+      const tickers = [...new Set((bars || []).map((row) => String(row.ticker || '').toUpperCase()).filter(Boolean))];
+      await refreshShadowTradierTimesales(tickers, sinceDate).catch(() => null);
+    }
+
+    const mappedBars = (bars || []).map((row) => {
+      const overlay = overlayTradierClose(row);
+      const match = classifyCloseMatch(row.dxlink_close, overlay.tradier_close);
+      return {
+        ticker: row.ticker,
+        bar_time: row.bar_time,
+        timeframe: row.timeframe,
+        dxlink_close: parseShadowPrice(row.dxlink_close),
+        tradier_close: overlay.tradier_close,
+        tradier_source: overlay.tradier_source,
+        reason: overlay.reason,
+        recorded_at: row.recorded_at,
+        comparable: match.comparable,
+        matched: match.matched,
+        diff: match.diff,
+      };
+    });
+    const overlayStats = summarizeBarMatches(mappedBars);
+
     return {
       ...empty,
-      bars: bars.map((row) => {
-        const match = classifyCloseMatch(row.dxlink_close, row.tradier_close);
-        return {
-          ticker: row.ticker,
-          bar_time: row.bar_time,
-          timeframe: row.timeframe,
-          dxlink_close: toFiniteOrNull(row.dxlink_close),
-          tradier_close: toFiniteOrNull(row.tradier_close),
-          recorded_at: row.recorded_at,
-          comparable: match.comparable,
-          matched: match.matched,
-          diff: match.diff,
-        };
-      }),
+      bars: mappedBars,
       bar_match: {
-        comparable,
-        matched,
-        incomplete: Math.max(0, total - comparable),
-        match_rate: comparable ? matched / comparable : null,
+        comparable: overlayStats.comparable,
+        matched: overlayStats.matched,
+        incomplete: overlayStats.incomplete,
+        match_rate: overlayStats.match_rate,
         tolerance: DXLINK_SHADOW_CLOSE_TOLERANCE,
-        total,
+        total: mappedBars.length,
+        stored_comparable: Number(barStats.comparable) || 0,
       },
       detections: detections.map((row) => ({
         id: row.id,
@@ -218,20 +249,20 @@ export async function getDxlinkShadowDashboard({ window: windowKey = 'today' } =
         strategy: row.strategy,
         direction: row.direction,
         kind: row.kind,
-        level: toFiniteOrNull(row.level),
-        price: toFiniteOrNull(row.price),
+        level: parseShadowPrice(row.level),
+        price: parseShadowPrice(row.price),
         detected_at: row.detected_at,
         bar_close_eval_ts: row.bar_close_eval_ts != null ? Number(row.bar_close_eval_ts) : null,
-        latency_from_touch_ms: toFiniteOrNull(row.latency_from_touch_ms),
-        saved_vs_bar_close_ms: toFiniteOrNull(row.saved_vs_bar_close_ms),
+        latency_from_touch_ms: toNullableNumber(row.latency_from_touch_ms),
+        saved_vs_bar_close_ms: toNullableNumber(row.saved_vs_bar_close_ms),
       })),
       detection_latency: {
         count: detectionCount,
         empty: detectionCount === 0,
-        avg_latency_from_touch_ms: toFiniteOrNull(detStats.avg_latency_from_touch_ms),
-        median_latency_from_touch_ms: toFiniteOrNull(detStats.median_latency_from_touch_ms),
-        avg_saved_vs_bar_close_ms: toFiniteOrNull(detStats.avg_saved_vs_bar_close_ms),
-        median_saved_vs_bar_close_ms: toFiniteOrNull(detStats.median_saved_vs_bar_close_ms),
+        avg_latency_from_touch_ms: toNullableNumber(detStats.avg_latency_from_touch_ms),
+        median_latency_from_touch_ms: toNullableNumber(detStats.median_latency_from_touch_ms),
+        avg_saved_vs_bar_close_ms: toNullableNumber(detStats.avg_saved_vs_bar_close_ms),
+        median_saved_vs_bar_close_ms: toNullableNumber(detStats.median_saved_vs_bar_close_ms),
       },
     };
   } catch (err) {
