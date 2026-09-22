@@ -1,6 +1,7 @@
 import { getSql } from '../sqlClient.js';
 import { ladderExitPhase } from '../ladder/ladderConfig.js';
 import { computeRealizedPnlDollars } from '../tradePnl.js';
+import { readStrategyEnvironmentForLog } from '../tradeLogEnvironment.js';
 
 const BOT_SYMBOL = '';
 const BOT_DATE = '';
@@ -90,9 +91,27 @@ export async function ensureEmaVwapSchema() {
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
     await sql`ALTER TABLE emavwap_trade_log ADD COLUMN IF NOT EXISTS entry_contracts INTEGER`;
     await sql`ALTER TABLE emavwap_trade_log ADD COLUMN IF NOT EXISTS pyramid_tier TEXT`;
+    // live|paper at insert time. NULL = pre-deploy unknown. No backfill.
+    await sql`ALTER TABLE emavwap_trade_log ADD COLUMN IF NOT EXISTS environment TEXT`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS broker_stop_order_id TEXT`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS broker_stop_trigger_price DOUBLE PRECISION`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS broker_stop_pnl_frac DOUBLE PRECISION`;
+    await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS pending_close_order_id TEXT`;
+    await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS pending_close_reason TEXT`;
+    await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS pending_close_submitted_at TEXT`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS emavwap_event_log (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        ticker TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        direction TEXT,
+        breakout_level DOUBLE PRECISION,
+        details_json TEXT,
+        created_at TEXT NOT NULL
+      )
+    `;
 
     const month = new Date().toISOString().slice(0, 7);
     const existing = await sql`
@@ -282,6 +301,19 @@ export async function updateEmaVwapPositionBrokerStop(id, state) {
   `;
 }
 
+export async function updateEmaVwapPositionPendingClose(id, state) {
+  await ensureEmaVwapSchema();
+  const sql = getSql();
+  await sql`
+    UPDATE emavwap_positions
+    SET
+      pending_close_order_id = ${state.pending_close_order_id ?? null},
+      pending_close_reason = ${state.pending_close_reason ?? null},
+      pending_close_submitted_at = ${state.pending_close_submitted_at ?? null}
+    WHERE id = ${id}
+  `;
+}
+
 async function insertEmaVwapTradeLogLeg(tx, position, exitPremium, pnlPct, reason, legQty) {
   const realizedPnl = computeRealizedPnlDollars({
     entryPremium: position.entry_premium,
@@ -290,12 +322,14 @@ async function insertEmaVwapTradeLogLeg(tx, position, exitPremium, pnlPct, reaso
     closeReason: reason,
   });
 
+  const environment = await readStrategyEnvironmentForLog('emavwap', tx);
   await tx`
     INSERT INTO emavwap_trade_log (
       ticker, direction, strike, expiration, entry_premium, exit_premium, quantity,
       pnl_pct, realized_pnl, vwap_at_entry, ema_at_entry, cross_direction,
       cross_candle_json, strike_bucket, entry_iv, entry_delta,
-      mfe_pct, mae_pct, close_reason, opened_at, closed_at, entry_contracts, pyramid_tier
+      mfe_pct, mae_pct, close_reason, opened_at, closed_at, entry_contracts, pyramid_tier,
+      environment
     )
     VALUES (
       ${position.ticker},
@@ -320,7 +354,8 @@ async function insertEmaVwapTradeLogLeg(tx, position, exitPremium, pnlPct, reaso
       ${position.opened_at},
       NOW()::text,
       ${position.entry_contracts ?? position.quantity},
-      ${position.pyramid_tier ?? null}
+      ${position.pyramid_tier ?? null},
+      ${environment}
     )
   `;
 }
@@ -354,12 +389,20 @@ export async function partialCloseEmaVwapPosition(id, exitPremium, pnlPct, reaso
   return position;
 }
 
+/** True when UPDATE … AND status = 'OPEN' claimed the row. */
+export function emaVwapCloseUpdateClaimed(updated) {
+  const count = Number(updated?.count);
+  if (Number.isFinite(count)) return count > 0;
+  return Array.isArray(updated) && updated.length > 0;
+}
+
 export async function closeEmaVwapPosition(id, exitPremium, pnlPct, reason, closeQty = null) {
   await ensureEmaVwapSchema();
   const sql = getSql();
   const posRows = await sql`SELECT * FROM emavwap_positions WHERE id = ${id}`;
   const position = rowToObject(posRows[0]);
   if (!position) return null;
+  if (String(position.status || '').toUpperCase() === 'CLOSED') return null;
 
   const legQty = closeQty ?? position.quantity;
   const exitFrac = Number(pnlPct) / 100;
@@ -368,12 +411,20 @@ export async function closeEmaVwapPosition(id, exitPremium, pnlPct, reason, clos
   position.mfe_pct = mfePct;
   position.mae_pct = maePct;
 
+  let claimed = false;
   await sql.begin(async (tx) => {
-    await tx`UPDATE emavwap_positions SET status = 'CLOSED' WHERE id = ${id}`;
+    const updated = await tx`
+      UPDATE emavwap_positions
+      SET status = 'CLOSED'
+      WHERE id = ${id} AND status = 'OPEN'
+      RETURNING id
+    `;
+    if (!emaVwapCloseUpdateClaimed(updated)) return;
     await insertEmaVwapTradeLogLeg(tx, position, exitPremium, pnlPct, reason, legQty);
+    claimed = true;
   });
 
-  return position;
+  return claimed ? position : null;
 }
 
 /** True if any position or trade log row exists for this cross-bar key today. */
@@ -407,4 +458,21 @@ export async function hasEmaVwapCrossExecutedToday({
     LIMIT 1
   `;
   return Boolean(logRow);
+}
+
+export async function logEmaVwapEvent({ ticker, tradeDate, eventType, direction, breakoutLevel, details }) {
+  await ensureEmaVwapSchema();
+  const sql = getSql();
+  await sql`
+    INSERT INTO emavwap_event_log (ticker, trade_date, event_type, direction, breakout_level, details_json, created_at)
+    VALUES (
+      ${ticker},
+      ${tradeDate},
+      ${eventType},
+      ${direction || null},
+      ${breakoutLevel ?? null},
+      ${JSON.stringify(details ?? {})},
+      NOW()::text
+    )
+  `;
 }

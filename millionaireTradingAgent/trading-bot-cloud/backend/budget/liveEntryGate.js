@@ -1,6 +1,10 @@
-import { getStrategyEnvironment } from '../strategyEnvironment.js';
+import { getStrategyEnvironment, isProductionRuntime } from '../strategyEnvironment.js';
 import { refreshLiveRiskState } from './liveRiskSync.js';
 import { sendLiveRiskUnknownTelegram } from '../telegramHandler.js';
+import {
+  getScheduledTradingHalt,
+  SCHEDULED_TRADING_HALT_REASON,
+} from './tradingHalt.js';
 
 const UNKNOWN_ALERT_COOLDOWN_MS = 15 * 60 * 1000;
 let lastUnknownAlertAt = 0;
@@ -61,13 +65,38 @@ export function evaluateLiveRiskRefreshForEntry(refresh) {
 
 /**
  * Live entry gate — fail-closed.
- * Paper strategies always allowed.
+ * Staging: paper strategies always allowed.
+ * Production: paper strategies are a no-op (no order, no entry Telegram).
  * Live strategies require a successful risk refresh and a known non-tripped breaker.
  */
 export async function checkLiveEntryGate(strategy) {
   const environment = await getStrategyEnvironment(strategy);
   if (environment !== 'live') {
+    if (isProductionRuntime()) {
+      return { allowed: false, environment: 'paper', reason: 'paper_entry_blocked' };
+    }
     return { allowed: true, environment: 'paper' };
+  }
+
+  let halt;
+  try {
+    halt = await getScheduledTradingHalt();
+  } catch (err) {
+    await alertRiskUnknownOnce(strategy, 'halt_state_unknown', err.message);
+    return {
+      allowed: false,
+      environment: 'live',
+      reason: 'live_risk_state_unknown',
+      detail: err.message,
+    };
+  }
+  if (halt.active) {
+    return {
+      allowed: false,
+      environment: 'live',
+      reason: SCHEDULED_TRADING_HALT_REASON,
+      detail: halt.resumeAtEt,
+    };
   }
 
   let refresh;

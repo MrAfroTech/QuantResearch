@@ -21,7 +21,8 @@ const DEFAULT_FSM = {
 };
 
 function getBaseUrl() {
-  return process.env.TRADIER_SANDBOX !== 'false' ? SANDBOX_URL : PRODUCTION_URL;
+  void SANDBOX_URL; // neutralize TRADIER_SANDBOX host gate — no sandbox fallback
+  return PRODUCTION_URL;
 }
 
 function getToken() {

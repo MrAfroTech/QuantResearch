@@ -6,7 +6,7 @@
  * Dashboard / calendar display subtracts Tastytrade opening commission.
  */
 
-const OPTION_OPENING_COMMISSION_PER_CONTRACT = 1;
+import { OPTION_OPENING_COMMISSION_PER_CONTRACT } from './ladder/ladderConfig.js';
 
 const NEVER_OPENED_CLOSE_REASONS = new Set([
   'entry_unfilled_cancelled',

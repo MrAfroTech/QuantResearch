@@ -11,7 +11,9 @@
     "build:vercel": "vite build",
     "dev:frontend": "vite --port 5173",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
-    "register:telegram-webhook": "node scripts/register-telegram-webhook.js"
+    "register:telegram-webhook": "node scripts/register-telegram-webhook.js",
+    "test:isolation": "node --test backend/isolation/isolationChecks.test.js",
+    "test:loss-containment": "node --test backend/positionManager.stops.test.js backend/emaVwapCross/emaVwapGoLive.test.js backend/premarketBreakout/premarketBrokerStopTrigger.test.js backend/ladder/ladderStopOrders.test.js backend/ladder/otoEntryStop.test.js backend/ladder/otoStopQuantity.test.js backend/ladder/ladderExit.test.js backend/ladder/flattenUntilClosed.test.js backend/ladder/initialStopRetry.test.js backend/ladder/brokerFlatSync.test.js backend/ladder/orderFillStatus.test.js backend/ladder/zeroFillEntry.test.js backend/ladder/partialLockStopReplace.test.js backend/orb/orbPartialLockTrail.test.js backend/premarketBreakout/premarketPartialLockTrail.test.js backend/emaVwapCross/emaVwapPartialLockTrail.test.js backend/analytics/hardStopSlippage.test.js backend/brokerageConnector.stopTif.test.js backend/brokerageConnector.expirationGuard.test.js backend/entryReentryGate.test.js backend/budget/liveBudget.test.js backend/budget/accountWideRisk.test.js backend/budget/dailyProfitHalt.test.js backend/budget/tradingHalt.test.js backend/budget/expiredPositionSweep.test.js backend/orb/orbEntryWindow.test.js backend/orb/orbDb.close.test.js backend/premarketBreakout/premarketDb.close.test.js backend/emaVwapCross/emaVwapDb.close.test.js backend/telegramCloseOutcome.test.js backend/ladder/ladderSizing.test.js && node backend/scripts/validateLiveRisk.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

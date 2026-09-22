@@ -25,7 +25,14 @@ import { getStrategyEnvironment } from './strategyEnvironment.js';
 import { sendCloseFailedTelegram } from './telegramHandler.js';
 
 const MAX_POSITIONS = 3;
-const STOP_LOSS_PCT = 0.10;
+/**
+ * Primary soft stop (poll). Flat 1.75% of premium — matches EMA/VWAP.
+ * Hard backstop is SWING_HARD_STOP_PCT (2%), not shared LADDER_HARD_STOP_PCT.
+ */
+const STOP_LOSS_PCT = 0.0175;
+
+/** Poll / fill-attribution hard ceiling. Independent of shared LADDER_HARD_STOP_PCT. */
+export const SWING_HARD_STOP_PCT = 0.02;
 
 export async function getBudgetRemaining() {
   return getSwingBudgetRemaining();
@@ -41,14 +48,34 @@ export async function canOpenPosition() {
   return openCount < MAX_POSITIONS && budgetRemaining > 0;
 }
 
+/**
+ * FCFS available budget for the next Swing entry (full remaining, not ÷ slots).
+ * Concurrent max-positions cap is enforced separately via canOpenPosition().
+ */
 export async function calculatePositionSize() {
+  const openCount = await getOpenPositionCount();
+  const budgetRemaining = await getBudgetRemaining();
+  if (openCount >= MAX_POSITIONS || budgetRemaining <= 0) return 0;
+  return budgetRemaining;
+}
+
+/** Snapshot used for entry decisions and skip messages (FCFS remaining). */
+export async function getSwingBudgetSnapshot() {
   const openCount = await getOpenPositionCount();
   const slotsAvailable = MAX_POSITIONS - openCount;
   const budgetRemaining = await getBudgetRemaining();
+  return {
+    openCount,
+    slotsAvailable,
+    budgetRemaining,
+    /** @deprecated alias — FCFS uses full remaining, not a per-slot reserve */
+    perSlot: budgetRemaining,
+  };
+}
 
-  if (slotsAvailable <= 0 || budgetRemaining <= 0) return 0;
-
-  return budgetRemaining / slotsAvailable;
+/** @deprecated Use getSwingBudgetSnapshot */
+export async function getSwingSlotBudget() {
+  return getSwingBudgetSnapshot();
 }
 
 export async function selectStrike(ticker, direction) {
@@ -66,9 +93,9 @@ export async function buildTradeParams(signal) {
   const expiration = await findMonthlyExpiration(signal.ticker);
   const strike = await selectStrike(signal.ticker, signal.direction);
   const premium = await getOptionPremium(signal.ticker, signal.direction, strike, expiration);
-  const budgetPerSlot = await calculatePositionSize();
-  const budgetRemaining = await getBudgetRemaining();
-  const sizing = ladderPositionSize(budgetPerSlot, premium);
+  const { openCount, slotsAvailable, budgetRemaining } = await getSwingBudgetSnapshot();
+  // FCFS: size against full remaining budget (not remaining ÷ open slots).
+  const sizing = ladderPositionSize(budgetRemaining, premium);
   const quantity = sizing.quantity;
   const totalCost = sizing.totalCost;
 
@@ -84,6 +111,10 @@ export async function buildTradeParams(signal) {
     affordable: sizing.affordable && quantity > 0 && totalCost <= budgetRemaining,
     entryContracts: sizing.entryContracts,
     ladderExitPhase: ladderExitPhase(0),
+    openCount,
+    slots: slotsAvailable,
+    perSlot: budgetRemaining,
+    budgetRemaining,
   };
 }
 
@@ -110,13 +141,14 @@ export async function monitorOpenPositions(notifyClose) {
       const action = await handleLadderPositionMonitor(position, {
         currentPremium,
         initialStopPct: STOP_LOSS_PCT,
+        hardStopPct: SWING_HARD_STOP_PCT,
         isTimeStop: false,
         updateExcursion: updatePositionExcursion,
         updateLadderState: updatePositionPyramidState,
         partialCloseLeg: partialClosePosition,
         fullClosePosition: closePosition,
-        closeBrokerOrder: (position, exitPremium, quantity) =>
-          closeOptionOrder(position, exitPremium, quantity, { environment, strategy: 'swing' }),
+        closeBrokerOrder: (position, exitPremium, quantity, closeOpts) =>
+          closeOptionOrder(position, exitPremium, quantity, { environment, strategy: 'swing', ...closeOpts }),
         onNotify: notifyClose
           ? async (pos, reason, pnlFrac, exitPremium) => {
               await notifyClose(pos, reason, pnlFrac, exitPremium);
@@ -163,5 +195,8 @@ export async function getPositionsWithPnL() {
 }
 
 export { MAX_POSITIONS, SWING_WEEKLY_TOP_OFF as MAX_MONTHLY_BUDGET, STOP_LOSS_PCT };
-/** Top ladder milestone — retained for analytics/diagnosis references. */
+/**
+ * Alias of the final ladder milestone (80%), not a flat +30% target.
+ * Swing profit-taking is the shared ladder (same as 0DTE) — scale-outs then ratchet trail.
+ */
 export const PROFIT_TARGET_PCT = LADDER_MILESTONES_PCT[LADDER_MILESTONES_PCT.length - 1];

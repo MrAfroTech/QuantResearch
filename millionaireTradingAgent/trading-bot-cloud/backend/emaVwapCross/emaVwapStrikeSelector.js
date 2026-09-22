@@ -48,8 +48,11 @@ function readGreeks(option) {
 export async function selectEmaVwapStrike(entrySignal) {
   const symbol = entrySignal.symbol;
   const direction = entrySignal.direction;
+  // Still classify for logging/analytics — do NOT drive OTM steps.
+  // Strong/farther-OTM path underperformed; always use ATM (weak) steps.
   const { bucket } = classifyCrossStrength(entrySignal);
-  const otmSteps = bucket === 'strong' ? STRONG_OTM_STEPS : WEAK_OTM_STEPS;
+  void STRONG_OTM_STEPS;
+  const otmSteps = WEAK_OTM_STEPS;
 
   const quote = await getQuote(symbol);
   const spot = Number(quote.last);

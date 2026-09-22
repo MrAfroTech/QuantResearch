@@ -3,6 +3,8 @@
  */
 
 import { logAlert } from '../db.js';
+import { shouldSuppressNonExitTelegram, isCloseOrExitAlertType } from '../strategyEnvironment.js';
+import { formatClosedTradeTelegramText } from '../telegramCloseOutcome.js';
 
 async function recordAlert(alertType, message, success, error) {
   try {
@@ -13,6 +15,14 @@ async function recordAlert(alertType, message, success, error) {
 }
 
 async function sendTelegram(text, alertType = 'orb_telegram') {
+  if (
+    !isCloseOrExitAlertType(alertType) &&
+    (await shouldSuppressNonExitTelegram('orb'))
+  ) {
+    console.log(`[ORB Telegram] skip ${alertType} — orb is paper on production`);
+    return null;
+  }
+
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
@@ -53,9 +63,17 @@ export async function sendOrbTradeOpenedTelegram({ ticker, direction, premium, p
   );
 }
 
-export async function sendOrbTradeClosedTelegram({ ticker, reason, pnlPct }) {
-  const pct = (Number(pnlPct) * 100).toFixed(1);
-  await sendTelegram(`🔴 0DTE ORB CLOSED ${ticker} — ${reason} | P&L: ${pct}%`, 'orb_trade_closed');
+export async function sendOrbTradeClosedTelegram({ ticker, reason, pnlPct, realizedPnl }) {
+  await sendTelegram(
+    formatClosedTradeTelegramText({
+      label: '0DTE ORB',
+      ticker,
+      reason,
+      pnlPct,
+      realizedPnl,
+    }),
+    'orb_trade_closed'
+  );
 }
 
 export async function sendOrbSignalNotExecutedTelegram({ ticker, direction, reason }) {
@@ -73,17 +91,12 @@ export async function sendOrbInsufficientBudgetTelegram({
   ticker,
   requiredCost,
   budgetRemaining,
-  perSlot,
-  slots,
 }) {
   const needed = Number(requiredCost).toFixed(2);
-  const slotBudget = Number(perSlot ?? budgetRemaining).toFixed(2);
-  const total = Number(budgetRemaining).toFixed(2);
-  const slotCount = Number.isFinite(slots) ? slots : '?';
+  const left = Number(budgetRemaining).toFixed(2);
   await sendTelegram(
     `0DTE ORB ${ticker} skipped: insufficient budget ` +
-      `(needed $${needed}, have $${slotBudget} available this slot ` +
-      `(of $${total} total remaining across ${slotCount} slots))`,
+      `(needed $${needed}, have $${left} remaining — FCFS, no per-slot reserve)`,
     'orb_insufficient_budget'
   );
 }

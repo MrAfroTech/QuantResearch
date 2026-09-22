@@ -51,7 +51,17 @@ export function evaluateEmaVwapSignals(symbol, enrichedBars, fsm) {
     nextFsm.last_processed_bar_time = enrichedBars[enrichedBars.length - 1].time;
   }
 
-  return { fsm: nextFsm, entries };
+  return { fsm: nextFsm, entries, events: [] };
+}
+
+/** Event log hook used by the executor (no PDHL/session-extreme path on this tree). */
+export async function logEmaVwapExplosiveEvents(events = []) {
+  for (const event of events) {
+    if (!event?.type) continue;
+    console.log(
+      `[EMA/VWAP] ${event.type} — ${event.symbol || ''} ${event.direction || ''}`.trim()
+    );
+  }
 }
 
 function buildEntry(symbol, direction, bar) {

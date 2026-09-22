@@ -11,6 +11,7 @@ import {
 import { isPaperTrading, getOptionPremium } from './brokerageConnector.js';
 import { getQuote } from './tradierClient.js';
 import { sendModeSwitchTelegram } from './telegramHandler.js';
+import { getScheduledTradingHalt } from './budget/tradingHalt.js';
 import { getLastScanResults } from './cloudScanner.js';
 import { getWatchlist, areDashboardControlsEnabled } from './config.js';
 import { getPremarketOpenPositions, getPremarketTradeLog } from './premarketBreakout/premarketDb.js';
@@ -27,9 +28,13 @@ import {
   buildPersistedDailyPnlByKey,
   tradeCountsAsLiveBook,
 } from './budget/dailyPnlCalendar.js';
+import { resolveEventOutcomes } from './analytics/eventLogOutcomes.js';
+import { ORB_ENTRIES_ENABLED } from './orb/orbConfig.js';
 
 const ORB_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
 const TRADE_LOG_LIMIT = 40;
+const EVENT_LOG_LIMIT = 80;
+const EVENT_LOG_LOOKBACK_DAYS = 7;
 
 let schemaReady;
 
@@ -89,6 +94,101 @@ function mondayOfWeekEt(date = new Date()) {
   const diff = dayIndex === 0 ? -6 : 1 - dayIndex;
   utc.setUTCDate(utc.getUTCDate() + diff);
   return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
+}
+
+function etDateDaysAgo(days, date = new Date()) {
+  const { year, month, day } = getEtParts(date);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  utc.setUTCDate(utc.getUTCDate() - Number(days || 0));
+  return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
+}
+
+function rowToPlain(row) {
+  if (!row) return null;
+  return Object.fromEntries(Object.entries(row));
+}
+
+async function fetchBreakoutEventLog() {
+  const sql = getSql();
+  const since = etDateDaysAgo(EVENT_LOG_LOOKBACK_DAYS);
+  const tradeSince = `${etDateDaysAgo(EVENT_LOG_LOOKBACK_DAYS + 1)} `;
+
+  try {
+    const [orbEvents, pmEvents, emaEvents, orbTrades, pmTrades, emaTrades] = await Promise.all([
+      sql`
+        SELECT id, ticker, trade_date, event_type, direction, breakout_level, created_at
+        FROM orb_event_log
+        WHERE trade_date >= ${since}
+        ORDER BY id DESC
+        LIMIT ${EVENT_LOG_LIMIT}
+      `,
+      sql`
+        SELECT id, ticker, trade_date, event_type, direction, breakout_level, created_at
+        FROM premarket_event_log
+        WHERE trade_date >= ${since}
+        ORDER BY id DESC
+        LIMIT ${EVENT_LOG_LIMIT}
+      `,
+      sql`
+        SELECT id, ticker, trade_date, event_type, direction, breakout_level, created_at
+        FROM emavwap_event_log
+        WHERE trade_date >= ${since}
+        ORDER BY id DESC
+        LIMIT ${EVENT_LOG_LIMIT}
+      `.catch(() => []),
+      sql`
+        SELECT id, ticker, direction, opened_at, closed_at, close_reason, realized_pnl, pnl_pct
+        FROM orb_trade_log
+        WHERE opened_at >= ${tradeSince}
+      `,
+      sql`
+        SELECT id, ticker, direction, opened_at, closed_at, close_reason, realized_pnl, pnl_pct
+        FROM premarket_trade_log
+        WHERE opened_at >= ${tradeSince}
+      `,
+      sql`
+        SELECT id, ticker, direction, opened_at, closed_at, close_reason, realized_pnl, pnl_pct
+        FROM emavwap_trade_log
+        WHERE opened_at >= ${tradeSince}
+      `.catch(() => []),
+    ]);
+
+    const events = [
+      ...orbEvents.map((row) => ({ ...rowToPlain(row), strategy: 'orb' })),
+      ...pmEvents.map((row) => ({ ...rowToPlain(row), strategy: 'premarket' })),
+      ...(emaEvents || []).map((row) => ({ ...rowToPlain(row), strategy: 'emavwap' })),
+    ];
+    const trades = [
+      ...orbTrades.map((row) => ({ ...rowToPlain(row), strategy: 'orb' })),
+      ...pmTrades.map((row) => ({ ...rowToPlain(row), strategy: 'premarket' })),
+      ...(emaTrades || []).map((row) => ({ ...rowToPlain(row), strategy: 'emavwap' })),
+    ];
+
+    return resolveEventOutcomes({ events, trades }).slice(0, EVENT_LOG_LIMIT);
+  } catch (err) {
+    console.warn('[handlers] breakout event log failed:', err.message);
+    return [];
+  }
+}
+
+function attachOutcomeToLastSignal(lastSignal, eventLog) {
+  if (!lastSignal || !eventLog?.length) return lastSignal;
+  const checked = String(lastSignal.checked_at || '');
+  const ticker = String(lastSignal.ticker || '').toUpperCase();
+  const match = eventLog.find(
+    (row) =>
+      String(row.ticker || '').toUpperCase() === ticker &&
+      String(row.created_at || '') === checked
+  );
+  if (!match) return lastSignal;
+  return {
+    ...lastSignal,
+    outcome: match.outcome,
+    outcome_label: match.outcome_label,
+    close_reason: match.close_reason,
+    realized_pnl: match.realized_pnl,
+    opened_at: match.opened_at,
+  };
 }
 
 function parseClosedAtEt(trade) {
@@ -698,7 +798,9 @@ export async function buildStatusResponse() {
     .slice(0, TRADE_LOG_LIMIT)
     .map((trade) => mapTradeLogEntry(trade, trade._strategy));
 
-  const lastSignal = await getLastSignal();
+  const lastSignalRaw = await getLastSignal();
+  const breakoutEventLog = await fetchBreakoutEventLog();
+  const lastSignal = attachOutcomeToLastSignal(lastSignalRaw, breakoutEventLog);
   const watchlist = getWatchlist();
   const scanResults = getLastScanResults();
 
@@ -770,6 +872,7 @@ export async function buildStatusResponse() {
     watchlist,
     watchlist_count: watchlist.length,
     last_signal_checked: lastSignal,
+    breakout_event_log: breakoutEventLog,
     open_positions: openPositions,
     trade_log: tradeLog,
     server_time: new Date().toISOString(),
@@ -799,6 +902,18 @@ export async function switchExecutionMode(input, strategyArg) {
   }
   if (!['swing', 'orb', 'premarket'].includes(strategy)) {
     throw new Error('Strategy must be swing, orb, or premarket');
+  }
+
+  if (mode === 'AUTO') {
+    const halt = await getScheduledTradingHalt();
+    if (halt.active) {
+      throw new Error(
+        `Scheduled trading halt until ${halt.resumeAtEt} — AUTO is blocked`
+      );
+    }
+    if (strategy === 'orb' && !ORB_ENTRIES_ENABLED) {
+      throw new Error('ORB entries are disabled — live and paper orders are off');
+    }
   }
 
   const sql = getSql();

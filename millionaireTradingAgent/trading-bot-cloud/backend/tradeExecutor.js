@@ -1,5 +1,7 @@
 import { getBotState, insertPosition, markSignalExecuted, hasSwingEntryExecutedToday, logSignal, updatePositionPyramidState } from './db.js';
 import { placeOptionOrder } from './brokerageConnector.js';
+import { bookedEntryQuantity, shouldBookConfirmedEntry } from './ladder/orderFillStatus.js';
+import { maybeSkipUnfilledOpenInsert } from './ladder/zeroFillEntry.js';
 import {
   canOpenPosition,
   buildTradeParams,
@@ -8,11 +10,8 @@ import { getSwingBudgetRemaining, getSwingTotalAllocated, SWING_WEEKLY_TOP_OFF }
 import { getStrategyEnvironment } from './strategyEnvironment.js';
 import { checkLiveEntryGate } from './budget/liveEntryGate.js';
 import { etDateKey } from './orb/tradierTimesales.js';
-import {
-  getStopLossReentryCooldown,
-  formatCooldownRemaining,
-  STOP_LOSS_REENTRY_COOLDOWN_MS,
-} from './entryCooldown.js';
+import { getSameDayReentryGate } from './entryReentryGate.js';
+import { getTickerPauseGate } from './tickerPauses.js';
 
 /** Documented base weekly allocation for swing (DB total_allocated is authoritative at runtime). */
 /** @deprecated Use SWING_WEEKLY_TOP_OFF from budget/budgetAllocations.js */
@@ -65,31 +64,63 @@ async function evaluateAndExecute(signal) {
     return { signal, executed: false, reason: 'already_executed_today' };
   }
 
-  const cooldown = await getStopLossReentryCooldown({
+  const pause = getTickerPauseGate({
     strategy: 'swing',
     ticker: signal.ticker,
     direction: signal.direction,
   });
-  if (cooldown.blocked) {
-    const left = formatCooldownRemaining(cooldown.remainingMs);
+  if (pause.blocked) {
     console.log(
-      `[tradeExecutor] Stop-loss cooldown (${STOP_LOSS_REENTRY_COOLDOWN_MS / 60000}m) — ` +
-        `skipping ${signal.ticker} ${signal.direction} (${left} remaining)`
+      `[tradeExecutor] ${pause.reason} — skipping ${signal.ticker} ${signal.direction}` +
+        (pause.note ? ` (${pause.note})` : '')
     );
     await logSignal({
       ticker: signal.ticker,
       signalType: signal.signalType,
-      result: 'stop_loss_cooldown',
+      result: pause.reason,
       direction: signal.direction,
       confidence: signal.confidence,
       executed: false,
     });
-    return { signal, executed: false, reason: 'stop_loss_cooldown', cooldownRemainingMs: cooldown.remainingMs };
+    return { signal, executed: false, reason: pause.reason };
+  }
+
+  const reentry = await getSameDayReentryGate({
+    strategy: 'swing',
+    ticker: signal.ticker,
+    direction: signal.direction,
+    tradeDate,
+  });
+  if (reentry.blocked) {
+    console.log(
+      `[tradeExecutor] Same-day loss block — skipping ${signal.ticker} ${signal.direction}` +
+        ` (last today: ${reentry.lastCloseReason} pnl=${reentry.lastPnl})`
+    );
+    await logSignal({
+      ticker: signal.ticker,
+      signalType: signal.signalType,
+      result: 'same_day_loss_block',
+      direction: signal.direction,
+      confidence: signal.confidence,
+      executed: false,
+    });
+    return { signal, executed: false, reason: 'same_day_loss_block', lastPnl: reentry.lastPnl };
   }
 
   const liveGate = await checkLiveEntryGate('swing');
   if (!liveGate.allowed) {
     console.log(`[tradeExecutor] ${liveGate.reason} — blocking entry for ${signal.ticker}`);
+    if (liveGate.reason === 'paper_entry_blocked') {
+      await logSignal({
+        ticker: signal.ticker,
+        signalType: signal.signalType,
+        result: 'paper_entry_blocked',
+        direction: signal.direction,
+        confidence: signal.confidence,
+        executed: false,
+      });
+      return { signal, executed: false, reason: 'paper_entry_blocked' };
+    }
     await logSignal({
       ticker: signal.ticker,
       signalType: signal.signalType,
@@ -109,8 +140,9 @@ async function evaluateAndExecute(signal) {
     return { signal, executed: false, reason: 'max_positions' };
   }
 
-  const tradeParams = await buildTradeParams(signal);
-  const budgetRemaining = await getSwingBudgetRemaining();
+  let tradeParams = await buildTradeParams(signal);
+
+  const budgetRemaining = tradeParams.budgetRemaining;
 
   if (!tradeParams.affordable) {
     return {
@@ -119,6 +151,9 @@ async function evaluateAndExecute(signal) {
       reason: 'budget_exhausted',
       budgetRemaining,
       requiredCost: tradeParams.requiredCost,
+      perSlot: tradeParams.perSlot,
+      slots: tradeParams.slots,
+      openCount: tradeParams.openCount,
     };
   }
 
@@ -129,6 +164,9 @@ async function evaluateAndExecute(signal) {
       reason: 'budget_exhausted',
       budgetRemaining,
       requiredCost: tradeParams.totalCost,
+      perSlot: tradeParams.perSlot,
+      slots: tradeParams.slots,
+      openCount: tradeParams.openCount,
     };
   }
 
@@ -153,13 +191,45 @@ export async function executeTrade(signal, tradeParams) {
       strategy: 'swing',
     });
 
+    const bookedQty = bookedEntryQuantity({
+      requestedQuantity: tradeParams.quantity,
+      fillQuantity: order.fillQuantity,
+    });
+    const unfilledSkip = await maybeSkipUnfilledOpenInsert({
+      order,
+      bookedQty,
+      environment,
+      strategy: 'swing',
+      ticker: tradeParams.ticker,
+      direction: tradeParams.direction,
+    });
+    if (unfilledSkip.skipped) {
+      return { signal, executed: false, reason: unfilledSkip.reason, order, tradeParams };
+    }
+    if (
+      !shouldBookConfirmedEntry({
+        fillQuantity: order.fillQuantity,
+        bookedQuantity: bookedQty,
+        fillPrice: order.fillPrice,
+        dryRun: order.dryRun,
+        simulated: order.simulated,
+      })
+    ) {
+      console.error(
+        `[Swing] ${tradeParams.ticker} filled qty=${bookedQty} without a confirmed fill price ` +
+          `— refusing to book the selection quote $${tradeParams.premium}`
+      );
+      return { signal, executed: false, reason: 'entry_fill_price_missing', order, tradeParams };
+    }
+    const bookedPremium = Number(order.fillPrice);
+
     const positionId = await insertPosition({
       ticker: tradeParams.ticker,
       direction: tradeParams.direction,
       strike: tradeParams.strike,
       expiration: tradeParams.expiration,
-      entry_premium: tradeParams.premium,
-      quantity: tradeParams.quantity,
+      entry_premium: bookedPremium,
+      quantity: bookedQty,
       order_id: order.orderId,
       broker: order.broker || 'schwab',
       signal_type: signal.signalType,
@@ -167,18 +237,20 @@ export async function executeTrade(signal, tradeParams) {
         signal.signalType === 'tv_breakout' && Number.isFinite(Number(signal.prev_daily_high))
           ? Number(signal.prev_daily_high)
           : null,
-      entry_contracts: tradeParams.entryContracts,
+      entry_contracts: bookedQty,
       pyramid_tier: 'ladder',
     });
 
     await updatePositionPyramidState(positionId, {
       exit_phase: tradeParams.ladderExitPhase,
       trail_peak_pnl_frac: 0,
-      contracts_open: tradeParams.quantity,
+      contracts_open: bookedQty,
     });
 
     console.log(
-      `[Swing] Opened ${tradeParams.ticker} qty=${tradeParams.quantity} ladder entry_contracts=${tradeParams.entryContracts}`
+      `[Swing] Opened ${tradeParams.ticker} qty=${bookedQty} ` +
+        `(requested=${tradeParams.quantity} filled=${order.fillQuantity ?? 'n/a'}) ` +
+        `premium=$${bookedPremium} ladder entry_contracts=${bookedQty}`
     );
 
     await markSignalExecuted(signal.ticker, signal.signalType);
