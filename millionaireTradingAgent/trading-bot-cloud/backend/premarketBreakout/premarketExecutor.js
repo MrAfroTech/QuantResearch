@@ -2,6 +2,7 @@ import { placeOptionOrder } from '../brokerageConnector.js';
 import { ladderPositionSize } from '../ladder/ladderSizing.js';
 import {
   getPremarketMaxPositions,
+  PREMARKET_MAX_ENTRY_CONTRACTS,
   PREMARKET_SYMBOLS,
   PREMARKET_MIN_ENTRY_PREMIUM,
   ENTRY_BELOW_PREMIUM_FLOOR_REASON,
@@ -141,7 +142,18 @@ function positionSize(budgetRemaining, openCount, premium, maxPositions) {
   // budgetRemaining is already the strategy's live-split or paper remaining.
   // Affordability is judged against perSlot, not total remaining.
   const perSlot = budgetRemaining / slots;
-  return { ...ladderPositionSize(perSlot, premium), perSlot, slots };
+  const sized = ladderPositionSize(perSlot, premium);
+  const quantity = Math.min(PREMARKET_MAX_ENTRY_CONTRACTS, sized.quantity || 0);
+  const requiredCost = sized.requiredCost || premium * 100;
+  return {
+    ...sized,
+    quantity,
+    entryContracts: quantity,
+    totalCost: quantity * requiredCost,
+    affordable: quantity >= 1,
+    perSlot,
+    slots,
+  };
 }
 
 async function tryExecuteEntry(entry) {

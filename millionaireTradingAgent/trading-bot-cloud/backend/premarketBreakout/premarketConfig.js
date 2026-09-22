@@ -18,6 +18,18 @@ export function getPremarketMaxPositions(environment) {
     : PREMARKET_MAX_POSITIONS;
 }
 
+/**
+ * Premarket-only hard entry-size cap. Overrides max-affordable under the
+ * shared ladder target (5). ORB/EMA/Swing sizing is unchanged.
+ *
+ * REVERSIBLE OVERRIDE — 2026-09-22.
+ * Wired at: premarketExecutor.positionSize.
+ *
+ * To restore max-affordable for Premarket: set PREMARKET_MAX_ENTRY_CONTRACTS
+ * back to LADDER_TARGET_CONTRACTS (5).
+ */
+export const PREMARKET_MAX_ENTRY_CONTRACTS = 1;
+
 /** Profit target and stop loss (fraction of premium). Independently tunable from ORB. */
 export const PREMARKET_PROFIT_PCT = 0.175;
 export const PREMARKET_STOP_LOSS_PCT = 0.10;
