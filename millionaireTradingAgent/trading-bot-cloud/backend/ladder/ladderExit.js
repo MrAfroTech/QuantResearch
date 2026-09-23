@@ -99,11 +99,8 @@ export function evaluateLadderExit({
       // Same trigger % as before. ORB/Premarket flatten the whole book instead of
       // LADDER_SELL_SCHEDULE partials (which cannot map onto variable entry size).
       if (fullPositionExits) {
-        return {
-          action: 'close_all',
-          reason: LADDER_CLOSE_REASON.PROFIT_TARGET,
-          contracts: open,
-        };
+        // Profit trail (3%→1000% ratchet) owns winners. Do not flatten at +20%.
+        return { action: 'hold' };
       }
 
       const sellQty = Math.min(sellSchedule[milestonesCompleted], open);

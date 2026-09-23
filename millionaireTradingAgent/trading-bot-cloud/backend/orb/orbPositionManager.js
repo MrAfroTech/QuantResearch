@@ -36,10 +36,7 @@ import {
 import { shouldKickInitialStop, isFlattenRetryInFlight } from '../ladder/flattenUntilClosed.js';
 import { positionHasConfirmedBrokerLong } from '../ladder/orderFillStatus.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
-import {
-  LADDER_CLOSE_REASON,
-  parseLadderMilestonesCompleted,
-} from '../ladder/ladderConfig.js';
+import { LADDER_CLOSE_REASON } from '../ladder/ladderConfig.js';
 
 async function notifyOrbClose(position, reason, pnlPct, exitPremium) {
   await sendOrbTradeClosedTelegram({
@@ -271,7 +268,6 @@ async function armOrbPartialLockBeforeLadder(position, {
 }) {
   const entry = Number(position.entry_premium);
   if (!(entry > 0) || !Number.isFinite(Number(currentPremium))) return null;
-  if (parseLadderMilestonesCompleted(position.exit_phase) > 0) return null;
 
   const pnlFrac = (Number(currentPremium) - entry) / entry;
   const mfeFrac = Math.max(Number(position.mfe_pct) || 0, pnlFrac);
@@ -327,7 +323,6 @@ async function tryOrbPartialLockTrailClose(position, {
   if (decision.action !== 'close_all') {
     if (
       decision.trailFloor != null &&
-      decision.inactiveReason !== 'post_milestone_ladder_owns_trail' &&
       decision.inactiveReason !== 'below_activation' &&
       decision.inactiveReason !== 'hard_stop_owns_exit'
     ) {
@@ -532,10 +527,8 @@ export async function monitorOrbPositions() {
       }
 
       // ORB-only: pre-milestone partial-lock after ladder hold.
-      // Hard-gated to milestonesCompleted === 0 so it never overrides post-milestone
-      // stepped-floor trail. Skipped on time-stop (ladder owns EOD).
-      const milestonesCompleted = parseLadderMilestonesCompleted(position.exit_phase);
-      if (!timeStop && milestonesCompleted === 0) {
+      // Profit trail after ladder hold (3%→1000% ratchet). Skipped on time-stop.
+      if (!timeStop) {
         const partialLockAction = await tryOrbPartialLockTrailClose(position, {
           currentPremium,
           environment,

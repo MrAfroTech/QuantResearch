@@ -8,10 +8,11 @@ import { ORB_MIN_ENTRY_PREMIUM } from '../orb/orbConfig.js';
 import { PREMARKET_MIN_ENTRY_PREMIUM } from '../premarketBreakout/premarketConfig.js';
 import { EMA_VWAP_MIN_ENTRY_PREMIUM } from '../emaVwapCross/emaVwapConfig.js';
 import {
-  ORB_PARTIAL_LOCK_TRAIL_DIVISOR,
-} from '../orb/orbConfig.js';
-import { PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR } from '../premarketBreakout/premarketConfig.js';
-import { EMA_VWAP_PARTIAL_LOCK_TRAIL_DIVISOR } from '../emaVwapCross/emaVwapConfig.js';
+  PARTIAL_LOCK_TRAIL_MAX_PCT,
+  PARTIAL_LOCK_TRAIL_START_PCT,
+  PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
+  PARTIAL_LOCK_TRAIL_STEP_TO_100,
+} from '../ladder/partialLockTrailRungs.js';
 import { LIVE_PER_TRADE_CAP_FRAC, livePerTradeCapFracFor } from './liveBudget.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -24,10 +25,11 @@ describe('account-wide live risk extensions', () => {
     assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.85);
   });
 
-  it('partial-lock trail divisor is 1.3 on all three strategies', () => {
-    assert.equal(ORB_PARTIAL_LOCK_TRAIL_DIVISOR, 1.3);
-    assert.equal(PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR, 1.3);
-    assert.equal(EMA_VWAP_PARTIAL_LOCK_TRAIL_DIVISOR, 1.3);
+  it('profit trail starts at +3%, steps 5% to 100%, then 10% to 1000%', () => {
+    assert.equal(PARTIAL_LOCK_TRAIL_START_PCT, 0.03);
+    assert.equal(PARTIAL_LOCK_TRAIL_STEP_TO_100, 0.05);
+    assert.equal(PARTIAL_LOCK_TRAIL_STEP_AFTER_100, 0.1);
+    assert.equal(PARTIAL_LOCK_TRAIL_MAX_PCT, 10);
   });
 
   it('live per-trade cap is 80% for orb, premarket, and emavwap', () => {

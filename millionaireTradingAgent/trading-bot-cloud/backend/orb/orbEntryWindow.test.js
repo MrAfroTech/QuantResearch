@@ -8,7 +8,7 @@ import {
   ORB_ENTRY_WINDOW_END,
   ORB_MIN_ENTRY_PREMIUM,
   ORB_LIVE_PER_TRADE_CAP_FRAC,
-  ORB_PARTIAL_LOCK_TRAIL_DIVISOR,
+  ORB_PARTIAL_LOCK_ACTIVATION_MFE,
   ORB_MAX_ENTRY_CONTRACTS,
   ORB_ENTRY_SIZING,
   ORB_ENTRIES_ENABLED,
@@ -60,7 +60,7 @@ describe('ORB production entry/sizing constants', () => {
   it('min premium floor is $0.85 and live cap is 80%', () => {
     assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.85);
     assert.equal(ORB_LIVE_PER_TRADE_CAP_FRAC, 0.8);
-    assert.equal(ORB_PARTIAL_LOCK_TRAIL_DIVISOR, 1.3);
+    assert.equal(ORB_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
   });
 
   it('hard-caps ORB at 1 contract even when max-affordable would allow more', () => {

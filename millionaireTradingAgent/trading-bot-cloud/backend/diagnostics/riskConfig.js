@@ -1,4 +1,10 @@
 import {
+  PARTIAL_LOCK_TRAIL_MAX_PCT,
+  PARTIAL_LOCK_TRAIL_START_PCT,
+  PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
+  PARTIAL_LOCK_TRAIL_STEP_TO_100,
+} from '../ladder/partialLockTrailRungs.js';
+import {
   LIVE_PER_TRADE_CAP_FRAC,
   LIVE_PER_TRADE_CAP_FRAC_BY_STRATEGY,
   livePerTradeCapFracFor,
@@ -11,7 +17,6 @@ import {
   ORB_MAX_ENTRY_CONTRACTS,
   ORB_MIN_ENTRY_PREMIUM,
   ORB_PARTIAL_LOCK_ACTIVATION_MFE,
-  ORB_PARTIAL_LOCK_TRAIL_DIVISOR,
   ORB_STOP_LOSS_PCT,
 } from '../orb/orbConfig.js';
 import {
@@ -20,7 +25,6 @@ import {
   PREMARKET_MAX_ENTRY_CONTRACTS,
   PREMARKET_MIN_ENTRY_PREMIUM,
   PREMARKET_PARTIAL_LOCK_ACTIVATION_MFE,
-  PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR,
   PREMARKET_STOP_LOSS_PCT,
 } from '../premarketBreakout/premarketConfig.js';
 import {
@@ -29,7 +33,6 @@ import {
   EMA_VWAP_MAX_ENTRY_CONTRACTS,
   EMA_VWAP_MIN_ENTRY_PREMIUM,
   EMA_VWAP_PARTIAL_LOCK_ACTIVATION_MFE,
-  EMA_VWAP_PARTIAL_LOCK_TRAIL_DIVISOR,
   EMA_VWAP_STOP_LOSS_PCT,
 } from '../emaVwapCross/emaVwapConfig.js';
 
@@ -41,7 +44,6 @@ function strategyRisk({
   softStopPct,
   hardStopPct,
   partialLockActivationMfe,
-  partialLockTrailDivisor,
 }) {
   return {
     per_trade_cap_frac: perTradeCapFrac,
@@ -55,7 +57,10 @@ function strategyRisk({
     hard_stop_pct: hardStopPct,
     partial_lock: {
       activation_mfe: partialLockActivationMfe,
-      trail_divisor: partialLockTrailDivisor,
+      increment_to_100: PARTIAL_LOCK_TRAIL_STEP_TO_100,
+      increment_after_100: PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
+      max_mfe: PARTIAL_LOCK_TRAIL_MAX_PCT,
+      start_mfe: PARTIAL_LOCK_TRAIL_START_PCT,
     },
   };
 }
@@ -83,7 +88,6 @@ export function buildRiskConfigSnapshot() {
           softStopPct: ORB_STOP_LOSS_PCT,
           hardStopPct: ORB_HARD_STOP_PCT,
           partialLockActivationMfe: ORB_PARTIAL_LOCK_ACTIVATION_MFE,
-          partialLockTrailDivisor: ORB_PARTIAL_LOCK_TRAIL_DIVISOR,
         }),
         orb_live_per_trade_cap_frac: ORB_LIVE_PER_TRADE_CAP_FRAC,
       },
@@ -95,7 +99,6 @@ export function buildRiskConfigSnapshot() {
         softStopPct: PREMARKET_STOP_LOSS_PCT,
         hardStopPct: PREMARKET_HARD_STOP_TRIGGER,
         partialLockActivationMfe: PREMARKET_PARTIAL_LOCK_ACTIVATION_MFE,
-        partialLockTrailDivisor: PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR,
       }),
       emavwap: strategyRisk({
         perTradeCapFrac: livePerTradeCapFracFor('emavwap'),
@@ -105,7 +108,6 @@ export function buildRiskConfigSnapshot() {
         softStopPct: EMA_VWAP_STOP_LOSS_PCT,
         hardStopPct: EMA_VWAP_HARD_STOP_PCT,
         partialLockActivationMfe: EMA_VWAP_PARTIAL_LOCK_ACTIVATION_MFE,
-        partialLockTrailDivisor: EMA_VWAP_PARTIAL_LOCK_TRAIL_DIVISOR,
       }),
     },
   };

@@ -41,10 +41,7 @@ import {
 import { shouldKickInitialStop, isFlattenRetryInFlight } from '../ladder/flattenUntilClosed.js';
 import { positionHasConfirmedBrokerLong } from '../ladder/orderFillStatus.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
-import {
-  LADDER_CLOSE_REASON,
-  parseLadderMilestonesCompleted,
-} from '../ladder/ladderConfig.js';
+import { LADDER_CLOSE_REASON } from '../ladder/ladderConfig.js';
 
 async function notifyEmaVwapClose(position, reason, pnlPct, exitPremium) {
   await sendEmaVwapTradeClosedTelegram({
@@ -276,7 +273,6 @@ async function armEmaVwapPartialLockBeforeLadder(position, {
 }) {
   const entry = Number(position.entry_premium);
   if (!(entry > 0) || !Number.isFinite(Number(currentPremium))) return null;
-  if (parseLadderMilestonesCompleted(position.exit_phase) > 0) return null;
 
   const pnlFrac = (Number(currentPremium) - entry) / entry;
   const mfeFrac = Math.max(Number(position.mfe_pct) || 0, pnlFrac);
@@ -332,7 +328,6 @@ async function tryEmaVwapPartialLockTrailClose(position, {
   if (decision.action !== 'close_all') {
     if (
       decision.trailFloor != null &&
-      decision.inactiveReason !== 'post_milestone_ladder_owns_trail' &&
       decision.inactiveReason !== 'below_activation' &&
       decision.inactiveReason !== 'hard_stop_owns_exit'
     ) {
@@ -532,8 +527,7 @@ export async function monitorEmaVwapPositions() {
         continue;
       }
 
-      const milestonesCompleted = parseLadderMilestonesCompleted(position.exit_phase);
-      if (!timeStop && milestonesCompleted === 0) {
+      if (!timeStop) {
         const partialLockAction = await tryEmaVwapPartialLockTrailClose(position, {
           currentPremium,
           environment,

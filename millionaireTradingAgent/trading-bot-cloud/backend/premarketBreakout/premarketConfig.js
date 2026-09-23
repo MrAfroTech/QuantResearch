@@ -52,14 +52,12 @@ export const PREMARKET_STOP_LOSS_PCT = 0.01;
 
 /**
  * Premarket-only pre-milestone partial-lock trail.
- * Activates only while milestonesCompleted === 0 (before first +20% ladder rung).
- * Floor = peak_mfe / PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR (~77% of peak locked in).
- * TUNABLE — chosen below the +6.9%–+9.9% peaks of the four real give-back trades
- * so normal noise does not arm the trail, with room before the first milestone.
+ * First lock rung is +3%, then +5% through +100%, then +10% through +1000%
+ * (see ladder/partialLockTrailRungs.js). TUNABLE arm so noise below +3% does not trail.
  */
 export const PREMARKET_PARTIAL_LOCK_ACTIVATION_MFE = 0.03;
 
-/** Peak ÷ this value = trail floor (1.3 ≈ lock ~77% of peak MFE). */
+/** Unused by the stepped trail; kept so older snapshots still import. */
 export const PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR = 1.3;
 
 /** Close reason for pre-milestone partial-lock trail exits (Premarket trade/event logs). */
