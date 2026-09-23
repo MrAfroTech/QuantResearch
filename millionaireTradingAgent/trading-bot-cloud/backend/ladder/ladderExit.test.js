@@ -592,24 +592,22 @@ describe('evaluateLadderExit full-position (ORB/Premarket)', () => {
     assert.equal(d.contracts, 5);
   });
 
-  it('first milestone (+20%) closes the entire book as profit_target, never scale_out', () => {
+  it('first milestone (+20%) holds so the profit trail can keep ratcheting', () => {
     assert.equal(LADDER_MILESTONES_PCT[0], 0.2);
     const d = evaluateLadderExit({ ...base, pnlFrac: 0.2 });
-    assert.equal(d.action, 'close_all');
-    assert.equal(d.reason, LADDER_CLOSE_REASON.PROFIT_TARGET);
-    assert.equal(d.contracts, 5);
+    assert.equal(d.action, 'hold');
+    assert.notEqual(d.reason, LADDER_CLOSE_REASON.PROFIT_TARGET);
     assert.notEqual(d.action, 'scale_out');
   });
 
-  it('bypasses LADDER_SELL_SCHEDULE: 3-contract book at +20% is close_all 3, not sell 1', () => {
+  it('bypasses LADDER_SELL_SCHEDULE: 3-contract book at +20% holds, not sell 1', () => {
     const d = evaluateLadderExit({
       ...base,
       contractsOpen: 3,
       entryContracts: 3,
       pnlFrac: 0.21,
     });
-    assert.equal(d.action, 'close_all');
-    assert.equal(d.contracts, 3);
+    assert.equal(d.action, 'hold');
   });
 
   it('EMA/Swing without the flag still scale out on the first rung', () => {

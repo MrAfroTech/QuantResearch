@@ -4,27 +4,12 @@ import { evaluatePremarketPartialLockTrail, shouldRaisePartialLockBrokerStop, re
 import {
   PREMARKET_PARTIAL_LOCK_ACTIVATION_MFE,
   PREMARKET_PARTIAL_LOCK_CLOSE_REASON,
-  PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR,
   PREMARKET_HARD_STOP_TRIGGER,
 } from './premarketConfig.js';
 
-describe('Premarket pre-milestone partial-lock trail', () => {
+describe('Premarket profit trail', () => {
   it('activation floor default is +3% (tunable)', () => {
     assert.equal(PREMARKET_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
-  });
-
-  it('trail divisor default is 1.3 (~77% of peak locked)', () => {
-    assert.equal(PREMARKET_PARTIAL_LOCK_TRAIL_DIVISOR, 1.3);
-  });
-
-  it('does not fire when milestonesCompleted > 0', () => {
-    const d = evaluatePremarketPartialLockTrail({
-      pnlFrac: 0.04,
-      mfeFrac: 0.1,
-      exitPhase: 'LADDER:1',
-    });
-    assert.equal(d.action, 'hold');
-    assert.equal(d.inactiveReason, 'post_milestone_ladder_owns_trail');
   });
 
   it('does not fire below activation MFE', () => {
@@ -37,7 +22,7 @@ describe('Premarket pre-milestone partial-lock trail', () => {
     assert.equal(d.inactiveReason, 'below_activation');
   });
 
-  it('fires close_all for a 5-contract pre-milestone book (full-size position)', () => {
+  it('fires close_all after peak lifts off a 5% rung and PnL is back at the floor', () => {
     const d = evaluatePremarketPartialLockTrail({
       pnlFrac: 0.04,
       mfeFrac: 0.08,
@@ -46,17 +31,17 @@ describe('Premarket pre-milestone partial-lock trail', () => {
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, PREMARKET_PARTIAL_LOCK_CLOSE_REASON);
     assert.equal(d.peakMfe, 0.08);
-    assert.ok(Math.abs(d.trailFloor - 0.08 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.05);
   });
 
-  it('holds when still above peak/1.3 floor', () => {
+  it('holds when still above the last printed increment', () => {
     const d = evaluatePremarketPartialLockTrail({
       pnlFrac: 0.07,
       mfeFrac: 0.08,
       exitPhase: 'LADDER:0',
     });
     assert.equal(d.action, 'hold');
-    assert.ok(Math.abs(d.trailFloor - 0.08 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.05);
   });
 
   it('uses current pnl as peak when it exceeds stored mfe', () => {
@@ -67,7 +52,17 @@ describe('Premarket pre-milestone partial-lock trail', () => {
     });
     assert.equal(d.action, 'hold');
     assert.equal(d.peakMfe, 0.09);
-    assert.ok(Math.abs(d.trailFloor - 0.09 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.05);
+  });
+
+  it('keeps trailing after the old +20% ladder milestone', () => {
+    const d = evaluatePremarketPartialLockTrail({
+      pnlFrac: 0.22,
+      mfeFrac: 0.22,
+      exitPhase: 'LADDER:1',
+    });
+    assert.equal(d.action, 'hold');
+    assert.equal(d.trailFloor, 0.2);
   });
 
   it('refuses close when past hard stop so hard_stop owns the exit', () => {
@@ -81,7 +76,7 @@ describe('Premarket pre-milestone partial-lock trail', () => {
     assert.equal(d.inactiveReason, 'hard_stop_owns_exit');
   });
 
-  it('still fires peak/1.3 give-back when above hard stop', () => {
+  it('still fires give-back to the last increment when above hard stop', () => {
     const d = evaluatePremarketPartialLockTrail({
       pnlFrac: 0.05,
       mfeFrac: 0.193,
@@ -90,7 +85,7 @@ describe('Premarket pre-milestone partial-lock trail', () => {
     });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, PREMARKET_PARTIAL_LOCK_CLOSE_REASON);
-    assert.ok(Math.abs(d.trailFloor - 0.193 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.15);
   });
 });
 
@@ -148,6 +143,7 @@ describe('shouldRaisePartialLockBrokerStop', () => {
       exitPhase: 'LADDER:0',
     });
     assert.equal(first.action, 'hold');
+    assert.equal(first.trailFloor, 0.05);
     assert.equal(
       shouldRaisePartialLockBrokerStop(
         { ...locked, broker_stop_trigger_price: 1.63, broker_stop_pnl_frac: -0.01 },
@@ -157,14 +153,15 @@ describe('shouldRaisePartialLockBrokerStop', () => {
     );
 
     const second = evaluatePremarketPartialLockTrail({
-      pnlFrac: 0.0939393939393941,
-      mfeFrac: 0.0939393939393941,
+      pnlFrac: 0.1,
+      mfeFrac: 0.1,
       exitPhase: 'LADDER:0',
     });
     assert.equal(second.action, 'hold');
+    assert.equal(second.trailFloor, 0.1);
     const check = shouldRaisePartialLockBrokerStop(locked, second.trailFloor);
     assert.equal(check.raise, true);
-    assert.equal(check.desiredTrigger, 1.77);
+    assert.equal(check.desiredTrigger, 1.82);
   });
 });
 
@@ -185,11 +182,11 @@ describe('resolvePremarketPartialLockStopFillReason', () => {
     assert.equal(reason, PREMARKET_PARTIAL_LOCK_CLOSE_REASON);
   });
 
-  it('leaves post-milestone fills to the ladder (trailing_stop)', () => {
+  it('labels a positive trail-floor fill as partial_lock_trail past +20%', () => {
     const reason = resolvePremarketPartialLockStopFillReason({
       position: { exit_phase: 'LADDER:1', broker_stop_pnl_frac: 0.2 },
       defaultReason: 'trailing_stop',
     });
-    assert.equal(reason, 'trailing_stop');
+    assert.equal(reason, PREMARKET_PARTIAL_LOCK_CLOSE_REASON);
   });
 });

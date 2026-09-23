@@ -9,27 +9,12 @@ import { shouldArmPartialLockBrokerStop } from '../ladder/partialLockStopReplace
 import {
   ORB_PARTIAL_LOCK_ACTIVATION_MFE,
   ORB_PARTIAL_LOCK_CLOSE_REASON,
-  ORB_PARTIAL_LOCK_TRAIL_DIVISOR,
   ORB_HARD_STOP_PCT,
 } from './orbConfig.js';
 
-describe('ORB pre-milestone partial-lock trail', () => {
+describe('ORB profit trail', () => {
   it('activation floor default is +3% (tunable)', () => {
     assert.equal(ORB_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
-  });
-
-  it('trail divisor default is 1.3 (~77% of peak locked)', () => {
-    assert.equal(ORB_PARTIAL_LOCK_TRAIL_DIVISOR, 1.3);
-  });
-
-  it('does not fire when milestonesCompleted > 0', () => {
-    const d = evaluateOrbPartialLockTrail({
-      pnlFrac: 0.04,
-      mfeFrac: 0.1,
-      exitPhase: 'LADDER:1',
-    });
-    assert.equal(d.action, 'hold');
-    assert.equal(d.inactiveReason, 'post_milestone_ladder_owns_trail');
   });
 
   it('does not fire below activation MFE', () => {
@@ -42,7 +27,7 @@ describe('ORB pre-milestone partial-lock trail', () => {
     assert.equal(d.inactiveReason, 'below_activation');
   });
 
-  it('fires close_all for a 5-contract pre-milestone book (full-size position)', () => {
+  it('fires close_all after peak lifts off a 5% rung and PnL is back at the floor', () => {
     const d = evaluateOrbPartialLockTrail({
       pnlFrac: 0.04,
       mfeFrac: 0.08,
@@ -51,18 +36,17 @@ describe('ORB pre-milestone partial-lock trail', () => {
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, ORB_PARTIAL_LOCK_CLOSE_REASON);
     assert.equal(d.peakMfe, 0.08);
-    assert.ok(Math.abs(d.trailFloor - 0.08 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.05);
   });
 
-
-  it('holds when still above peak/1.3 floor', () => {
+  it('holds when still above the last printed increment', () => {
     const d = evaluateOrbPartialLockTrail({
       pnlFrac: 0.07,
       mfeFrac: 0.08,
       exitPhase: 'LADDER:0',
     });
     assert.equal(d.action, 'hold');
-    assert.ok(Math.abs(d.trailFloor - 0.08 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.05);
   });
 
   it('uses current pnl as peak when it exceeds stored mfe', () => {
@@ -73,7 +57,17 @@ describe('ORB pre-milestone partial-lock trail', () => {
     });
     assert.equal(d.action, 'hold');
     assert.equal(d.peakMfe, 0.09);
-    assert.ok(Math.abs(d.trailFloor - 0.09 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.05);
+  });
+
+  it('keeps trailing after the old +20% ladder milestone', () => {
+    const d = evaluateOrbPartialLockTrail({
+      pnlFrac: 0.22,
+      mfeFrac: 0.22,
+      exitPhase: 'LADDER:1',
+    });
+    assert.equal(d.action, 'hold');
+    assert.equal(d.trailFloor, 0.2);
   });
 
   it('refuses close when past hard stop so hard_stop owns the exit', () => {
@@ -87,7 +81,7 @@ describe('ORB pre-milestone partial-lock trail', () => {
     assert.equal(d.inactiveReason, 'hard_stop_owns_exit');
   });
 
-  it('still fires peak/1.3 give-back when above hard stop', () => {
+  it('still fires give-back to the last increment when above hard stop', () => {
     const d = evaluateOrbPartialLockTrail({
       pnlFrac: 0.05,
       mfeFrac: 0.193,
@@ -96,7 +90,7 @@ describe('ORB pre-milestone partial-lock trail', () => {
     });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, ORB_PARTIAL_LOCK_CLOSE_REASON);
-    assert.ok(Math.abs(d.trailFloor - 0.193 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.15);
   });
 
   it('after initial-stop rejection, MFE +3% still arms replaceStop (TIF-fixed submit path)', () => {
@@ -108,7 +102,7 @@ describe('ORB pre-milestone partial-lock trail', () => {
     assert.equal(d.action, 'hold');
     assert.ok(d.peakMfe >= ORB_PARTIAL_LOCK_ACTIVATION_MFE);
     assert.equal(shouldArmPartialLockBrokerStop(d), true);
-    assert.ok(Math.abs(d.trailFloor - 0.031 / 1.3) < 1e-9);
+    assert.equal(d.trailFloor, 0.03);
 
     const nakedAfterReject = {
       entry_premium: 1.11,
@@ -181,11 +175,11 @@ describe('resolveOrbPartialLockStopFillReason', () => {
     assert.equal(reason, ORB_PARTIAL_LOCK_CLOSE_REASON);
   });
 
-  it('leaves post-milestone fills to the ladder (trailing_stop)', () => {
+  it('labels a positive trail-floor fill as partial_lock_trail past +20%', () => {
     const reason = resolveOrbPartialLockStopFillReason({
       position: { exit_phase: 'LADDER:1', broker_stop_pnl_frac: 0.2 },
       defaultReason: 'trailing_stop',
     });
-    assert.equal(reason, 'trailing_stop');
+    assert.equal(reason, ORB_PARTIAL_LOCK_CLOSE_REASON);
   });
 });

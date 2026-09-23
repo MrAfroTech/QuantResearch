@@ -40,7 +40,7 @@ export const POSITION_RECON_CRON = process.env.POSITION_RECON_CRON || '*/10 * * 
  * Partial-lock trails ratchet on each new MFE high, but MFE is a poll snapshot.
  * A 1-min tick cannot re-tighten an intra-minute run (Premarket IWM #82:
  * lock at 11:08:03 on 6.06% MFE, broker-flat 58s later; 9.39% never sampled
- * while still long). 10s is enough to re-arm peak÷1.3 on a new high.
+ * while still long). 10s is enough to re-arm the next 5%/10% rung on a new high.
  */
 export const ZERO_DTE_POSITION_MONITOR_CRON =
   process.env.ZERO_DTE_POSITION_MONITOR_CRON || '*/10 * * * * 1-5';

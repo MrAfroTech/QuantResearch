@@ -64,12 +64,12 @@ export const EMA_VWAP_ENTRY_SIZING = Object.freeze({
 });
 
 /**
- * EMA/VWAP-only pre-milestone partial-lock trail.
- * Floor = peak_mfe / EMA_VWAP_PARTIAL_LOCK_TRAIL_DIVISOR (~77% of peak locked in).
+ * Profit trail arm: first lock rung is +3%, then +5% through +100%,
+ * then +10% through +1000% (see ladder/partialLockTrailRungs.js).
  */
 export const EMA_VWAP_PARTIAL_LOCK_ACTIVATION_MFE = 0.03;
 
-/** Peak ÷ this value = trail floor (1.3 ≈ lock ~77% of peak MFE). */
+/** Unused by the stepped trail; kept so older snapshots still import. */
 export const EMA_VWAP_PARTIAL_LOCK_TRAIL_DIVISOR = 1.3;
 
 /** Close reason for pre-milestone partial-lock trail exits (EMA/VWAP trade/event logs). */

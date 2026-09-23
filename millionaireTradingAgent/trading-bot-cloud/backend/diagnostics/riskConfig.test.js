@@ -8,7 +8,6 @@ import {
   ORB_MAX_ENTRY_CONTRACTS,
   ORB_MIN_ENTRY_PREMIUM,
   ORB_PARTIAL_LOCK_ACTIVATION_MFE,
-  ORB_PARTIAL_LOCK_TRAIL_DIVISOR,
   ORB_STOP_LOSS_PCT,
 } from '../orb/orbConfig.js';
 import {
@@ -36,7 +35,10 @@ describe('buildRiskConfigSnapshot', () => {
     assert.equal(snap.strategies.orb.soft_stop_pct, ORB_STOP_LOSS_PCT);
     assert.equal(snap.strategies.orb.hard_stop_pct, ORB_HARD_STOP_PCT);
     assert.equal(snap.strategies.orb.partial_lock.activation_mfe, ORB_PARTIAL_LOCK_ACTIVATION_MFE);
-    assert.equal(snap.strategies.orb.partial_lock.trail_divisor, ORB_PARTIAL_LOCK_TRAIL_DIVISOR);
+    assert.equal(snap.strategies.orb.partial_lock.start_mfe, 0.03);
+    assert.equal(snap.strategies.orb.partial_lock.increment_to_100, 0.05);
+    assert.equal(snap.strategies.orb.partial_lock.increment_after_100, 0.1);
+    assert.equal(snap.strategies.orb.partial_lock.max_mfe, 10);
     assert.equal(snap.strategies.premarket.max_entry_contracts, PREMARKET_MAX_ENTRY_CONTRACTS);
     assert.equal(snap.strategies.premarket.premium_floor, PREMARKET_MIN_ENTRY_PREMIUM);
     assert.equal(snap.strategies.premarket.soft_stop_pct, PREMARKET_STOP_LOSS_PCT);

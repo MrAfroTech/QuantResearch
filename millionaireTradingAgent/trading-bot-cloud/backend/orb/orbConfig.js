@@ -39,13 +39,12 @@ export const ORB_STOP_LOSS_PCT = 0.01;
 export const ORB_HARD_STOP_PCT = 0.0175;
 
 /**
- * ORB-only pre-milestone partial-lock trail.
- * Activates only while milestonesCompleted === 0 (before first +20% ladder rung).
- * Floor = peak_mfe / ORB_PARTIAL_LOCK_TRAIL_DIVISOR (~77% of peak locked in).
+ * Profit trail arm: first lock rung is +3%, then +5% through +100%,
+ * then +10% through +1000% (see ladder/partialLockTrailRungs.js).
  */
 export const ORB_PARTIAL_LOCK_ACTIVATION_MFE = 0.03;
 
-/** Peak ÷ this value = trail floor (1.3 ≈ lock ~77% of peak MFE). */
+/** Unused by the stepped trail; kept so older snapshots still import. */
 export const ORB_PARTIAL_LOCK_TRAIL_DIVISOR = 1.3;
 
 /** Close reason for pre-milestone partial-lock trail exits (ORB trade/event logs). */
