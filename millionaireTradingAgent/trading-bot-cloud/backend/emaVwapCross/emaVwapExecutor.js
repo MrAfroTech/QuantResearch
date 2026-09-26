@@ -56,6 +56,7 @@ import {
   waitForCompletedFiveMinuteBarSettle,
 } from './emaVwapBarTiming.js';
 import { checkLiveEntryGate } from '../budget/liveEntryGate.js';
+import { DAILY_LOSS_LIMIT_BLOCK_REASON } from '../budget/liveDailyLossLimit.js';
 import { getSameDayReentryGate } from '../entryReentryGate.js';
 import { getDailyProfitHalt, DAILY_PROFIT_HALT_REASON, DAILY_PROFIT_HALT_THRESHOLD_DOLLARS } from '../budget/dailyProfitHalt.js';
 import { isPremiumBelowFloor } from '../zeroDte/entryGuards.js';
@@ -209,7 +210,7 @@ async function tryExecuteEntry(entry) {
     await sendEmaVwapSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: 'Live daily loss limit reached (30%) — new entries blocked for today',
+      reason: DAILY_LOSS_LIMIT_BLOCK_REASON,
     });
     return { executed: false, reason: liveGate.reason };
   }

@@ -142,7 +142,7 @@ export async function sendLiveRiskUnknownTelegram({ strategy, reason, detail }) 
       `Strategy: ${strat}\n` +
       `Reason: ${why}${extra}\n` +
       `New live entries are blocked until live balance/risk sync succeeds. ` +
-      `This is NOT the 30% daily loss trip — risk status could not be determined.`,
+      `This is NOT the $25 daily loss trip — risk status could not be determined.`,
     'live_risk_state_unknown'
   );
 }

@@ -215,8 +215,8 @@ async function getStrategySpent(strategy) {
 }
 
 /**
- * Live-path only: shared cash − Σ(deployed across all live strategies), then
- * provisional per-trade cap. Paper callers must not use this.
+ * Live-path only: 50% of account cash − Σ(deployed across all live strategies),
+ * then provisional per-trade cap. Paper callers must not use this.
  */
 export async function getLiveSizingBudgetRemaining(strategy) {
   const liveStrategies = await getLiveStrategyKeys();

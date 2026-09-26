@@ -67,6 +67,7 @@ import {
 } from '../zeroDte/completedBarTiming.js';
 import { isPremiumBelowFloor } from '../zeroDte/entryGuards.js';
 import { checkLiveEntryGate } from '../budget/liveEntryGate.js';
+import { DAILY_LOSS_LIMIT_BLOCK_REASON } from '../budget/liveDailyLossLimit.js';
 import { getSameDayReentryGate } from '../entryReentryGate.js';
 import {
   getOrbPremarketLevelCollisionGate,
@@ -242,7 +243,7 @@ async function tryExecuteEntry(entry) {
     await sendOrbSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: 'Live daily loss limit reached (30%) — new entries blocked for today',
+      reason: DAILY_LOSS_LIMIT_BLOCK_REASON,
     });
     return { executed: false, reason: liveGate.reason };
   }

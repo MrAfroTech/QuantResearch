@@ -42,15 +42,15 @@ describe('cross-strategy live FCFS shared pool', () => {
       perTradeCapFrac: livePerTradeCapFracFor('emavwap'),
     });
 
-    // Shared remaining = 140 - 40 = 100; account-wide 80% per-trade cap → 80.
-    assert.equal(computeLiveSharedRemaining(cash, 40), 100);
+    // Tradable pool = 50% of 140 = 70; remaining = 70 - 40 = 30; 80% per-trade cap → 24.
+    assert.equal(computeLiveSharedRemaining(cash, 40), 30);
     assert.equal(LIVE_PER_TRADE_CAP_FRAC, 0.8);
     assert.equal(livePerTradeCapFracFor('orb'), 0.8);
     assert.equal(livePerTradeCapFracFor('premarket'), 0.8);
     assert.equal(livePerTradeCapFracFor('emavwap'), 0.8);
-    assert.equal(orbRemaining, 80);
-    assert.equal(premarketRemaining, 80);
-    assert.equal(emaRemaining, 80);
+    assert.equal(orbRemaining, 24);
+    assert.equal(premarketRemaining, 24);
+    assert.equal(emaRemaining, 24);
     assert.notEqual(orbRemaining, 50);
     assert.notEqual(orbRemaining, 140);
   });
@@ -69,15 +69,18 @@ describe('cross-strategy live FCFS shared pool', () => {
       requestingStrategy: 'orb',
       perTradeCapFrac: livePerTradeCapFracFor('orb'),
     });
-    // 80% of 10000 = 8000 — not the full shared pool
-    assert.equal(sizingBudget, 8000);
+    // 50% of 10000 = 5000 tradable; 80% per-trade cap → 4000
+    assert.equal(sizingBudget, 4000);
+    assert.equal(computeLiveSharedRemaining(bigCash, 0), 5000);
+    assert.equal(computeLiveSharedRemaining(bigCash, 5000), 0);
     assert.ok(sizingBudget < bigCash);
 
     const premium = 1.0; // $100/contract
     const sizing = ladderPositionSize(sizingBudget, premium);
     assert.equal(sizing.affordable, true);
     assert.ok(sizing.totalCost <= sizingBudget);
-    assert.ok(sizingBudget === applyLivePerTradeCap(bigCash, livePerTradeCapFracFor('orb')));
+    const tradable = computeLiveSharedRemaining(bigCash, 0);
+    assert.equal(sizingBudget, applyLivePerTradeCap(tradable, livePerTradeCapFracFor('orb')));
   });
 
   it('returns 0 for a paper/non-live requesting strategy', () => {
@@ -102,20 +105,21 @@ describe('cross-strategy live FCFS shared pool', () => {
     assert.equal(meta.liveStrategies.length, 2);
   });
 
-  it('live max is 70% of capital for every live strategy, not a 50/50 split', () => {
+  it('live max is 50% of account capital, shared by every live strategy', () => {
     const cash = 200;
-    assert.equal(computeLiveBudgetMax(cash), 140);
-    assert.equal(computeLivePerStrategyBudget(cash, 2), 140);
-    assert.equal(computeLivePerStrategyBudget(cash, 1), 140);
-    assert.notEqual(computeLivePerStrategyBudget(cash, 2), cash / 2);
+    assert.equal(computeLiveBudgetMax(cash), 100);
+    assert.equal(computeLivePerStrategyBudget(cash, 2), 100);
+    assert.equal(computeLivePerStrategyBudget(cash, 1), 100);
+    assert.equal(computeLiveSharedRemaining(cash, 0), 100);
+    assert.equal(computeLiveSharedRemaining(cash, 100), 0);
 
     clearLiveBudgetCache();
     const cached = updateLiveBudgetCache({
       cashBalance: cash,
       liveStrategies: ['premarket', 'emavwap'],
     });
-    assert.equal(cached.perStrategyBudget.premarket, 140);
-    assert.equal(cached.perStrategyBudget.emavwap, 140);
+    assert.equal(cached.perStrategyBudget.premarket, 100);
+    assert.equal(cached.perStrategyBudget.emavwap, 100);
   });
 });
 

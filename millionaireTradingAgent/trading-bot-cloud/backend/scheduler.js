@@ -23,6 +23,7 @@ import {
 } from './analytics/confirmBarRecalibration.js';
 import { runWeeklyBudgetTopOff } from './budget/budgetAllocations.js';
 import { refreshLiveRiskState } from './budget/liveRiskSync.js';
+import { DAILY_LOSS_LIMIT_BLOCK_REASON } from './budget/liveDailyLossLimit.js';
 import { runPositionReconciliation } from './recon/positionReconciliation.js';
 import { logAlert } from './db.js';
 import { runIsolationCanaryCycle } from './isolation/isolationCanary.js';
@@ -99,8 +100,7 @@ const NOT_EXECUTED_REASONS = {
     `Same-day loss block — no re-entry for ${signal.ticker} ${signal.direction} after a losing close today`,
   ticker_paused_sofi_put: () =>
     'SOFI PUT paused — awaiting clean post-reentry-gate sample',
-  daily_loss_limit_reached: () =>
-    'Live daily loss limit reached (30%) — new entries blocked for today',
+  daily_loss_limit_reached: () => DAILY_LOSS_LIMIT_BLOCK_REASON,
   manual_mode: () => 'Bot is in MANUAL mode — awaiting approval',
   execution_error: (_signal, result) => result.error || 'Execution error',
 };

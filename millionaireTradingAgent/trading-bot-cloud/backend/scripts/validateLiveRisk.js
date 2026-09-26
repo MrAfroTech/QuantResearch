@@ -11,7 +11,7 @@ import {
   computeDailyPnl,
   shouldTriggerDailyLossLimit,
   computeUnrealizedPnl,
-  LIVE_DAILY_LOSS_LIMIT_PCT,
+  LIVE_DAILY_LOSS_LIMIT_DOLLARS,
 } from '../budget/liveDailyLossLimit.js';
 import { evaluateLiveRiskRefreshForEntry } from '../budget/liveEntryGate.js';
 
@@ -19,20 +19,20 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-// Live allocation max is 70% of cash per live strategy (not cash÷n).
+// Live allocation max is 50% of account cash, shared across live strategies.
 const onlyPremarket = computeLivePerStrategyBudget(10_000, 1);
-assert(onlyPremarket === 7_000, 'live max: single strategy is 70% of cash');
+assert(onlyPremarket === 5_000, 'live max: single strategy is 50% of cash');
 
 const bothLive = computeLivePerStrategyBudget(10_000, 2);
-assert(bothLive === 7_000, 'live max: two strategies each get 70% of cash, not 50/50');
+assert(bothLive === 5_000, 'live max: two strategies share one 50% pool');
 
 // Live FCFS shared pool + provisional per-trade cap
 const shared = computeLiveSharedRemaining(140, 40);
-assert(shared === 100, 'shared remaining = cash − all live deployed');
+assert(shared === 30, 'shared remaining = 50% of cash − all live deployed');
 
 const capped = applyLivePerTradeCap(shared);
 assert(LIVE_PER_TRADE_CAP_FRAC === 0.8, 'account-wide live per-trade cap is 80%');
-assert(capped === 80, 'default per-trade cap clamps to 80% of shared remaining');
+assert(capped === 24, 'default per-trade cap clamps to 80% of shared remaining');
 assert(ORB_LIVE_PER_TRADE_CAP_FRAC === 0.8, 'ORB live per-trade cap is 80%');
 assert(livePerTradeCapFracFor('orb') === 0.8, 'livePerTradeCapFracFor(orb) is 80%');
 assert(livePerTradeCapFracFor('premarket') === 0.8, 'Premarket live per-trade cap is 80%');
@@ -45,7 +45,7 @@ const orbSizing = resolveLiveSizingBudget({
   requestingStrategy: 'orb',
   perTradeCapFrac: livePerTradeCapFracFor('orb'),
 });
-assert(orbSizing === 80, 'ORB live remaining reflects Premarket deployed + 80% cap');
+assert(orbSizing === 24, 'ORB live remaining reflects Premarket deployed + 80% cap');
 assert(orbSizing !== 50, 'must not return stale equal-split (140/2)');
 
 const premarketSizing = resolveLiveSizingBudget({
@@ -55,19 +55,20 @@ const premarketSizing = resolveLiveSizingBudget({
   requestingStrategy: 'premarket',
   perTradeCapFrac: livePerTradeCapFracFor('premarket'),
 });
-assert(premarketSizing === 80, 'Premarket uses 80% per-trade cap');
+assert(premarketSizing === 24, 'Premarket uses 80% per-trade cap of the 50% pool');
 
 const dailyPnl = computeDailyPnl({ realizedToday: -500, unrealizedOpen: -400 });
 assert(dailyPnl === -900, 'daily P&L should sum realized and unrealized');
 
 assert(
-  shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -3_000 }),
-  '30% loss should trip breaker'
+  shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -25 }),
+  '$25 loss should trip breaker'
 );
 assert(
-  !shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -2_999 }),
-  '29.99% loss should not trip breaker'
+  !shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -24.99 }),
+  'loss under $25 should not trip breaker'
 );
+assert(LIVE_DAILY_LOSS_LIMIT_DOLLARS === 25, 'daily loss limit is $25');
 
 const unrealized = computeUnrealizedPnl(
   { entry_premium: 1.0, quantity: 2 },
@@ -140,7 +141,7 @@ console.log(
       },
       liveBudgetMax: { onlyPremarket, bothLive },
       dailyPnl,
-      lossLimitPct: LIVE_DAILY_LOSS_LIMIT_PCT,
+      lossLimitDollars: LIVE_DAILY_LOSS_LIMIT_DOLLARS,
       unrealized,
       failClosed: {
         blockedMissingCreds,

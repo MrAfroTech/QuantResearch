@@ -8,7 +8,11 @@ import { getEmaVwapOpenPositions } from '../emaVwapCross/emaVwapDb.js';
 import { getLiveStrategyKeys } from './liveBudget.js';
 import { sendDailyLossLimitTelegram } from '../telegramHandler.js';
 
-export const LIVE_DAILY_LOSS_LIMIT_PCT = 0.3;
+/** Flat daily loss that trips the live circuit breaker. */
+export const LIVE_DAILY_LOSS_LIMIT_DOLLARS = 25;
+
+export const DAILY_LOSS_LIMIT_BLOCK_REASON =
+  `Live daily loss limit reached ($${LIVE_DAILY_LOSS_LIMIT_DOLLARS}) — new entries blocked for today`;
 
 let schemaReady;
 
@@ -19,7 +23,9 @@ export function computeDailyPnl({ realizedToday, unrealizedOpen }) {
 export function shouldTriggerDailyLossLimit({ baselineBalance, dailyPnl }) {
   const baseline = Number(baselineBalance);
   if (!Number.isFinite(baseline) || baseline <= 0) return false;
-  return Number(dailyPnl) <= -LIVE_DAILY_LOSS_LIMIT_PCT * baseline;
+  const pnl = Number(dailyPnl);
+  if (!Number.isFinite(pnl)) return false;
+  return pnl <= -LIVE_DAILY_LOSS_LIMIT_DOLLARS;
 }
 
 export function computeUnrealizedPnl(position, currentPremium) {
@@ -213,7 +219,7 @@ export async function syncLiveDailyLossLimit({
     console.log(
       `[LiveRisk] daily_loss_limit_reached — baseline=$${row.baseline_balance.toFixed(2)}, ` +
         `daily P&L=$${pnl.dailyPnl.toFixed(2)} (realized=$${pnl.realizedToday.toFixed(2)}, ` +
-        `unrealized=$${pnl.unrealizedOpen.toFixed(2)}), limit=${LIVE_DAILY_LOSS_LIMIT_PCT * 100}%`
+        `unrealized=$${pnl.unrealizedOpen.toFixed(2)}), limit=$${LIVE_DAILY_LOSS_LIMIT_DOLLARS.toFixed(2)}`
     );
   }
 
@@ -235,7 +241,7 @@ export async function syncLiveDailyLossLimit({
     tradeDate,
     baselineBalance: row.baseline_balance,
     ...pnl,
-    lossLimitPct: LIVE_DAILY_LOSS_LIMIT_PCT,
+    lossLimitDollars: LIVE_DAILY_LOSS_LIMIT_DOLLARS,
     newlyTriggered: shouldTrip,
   };
 }
