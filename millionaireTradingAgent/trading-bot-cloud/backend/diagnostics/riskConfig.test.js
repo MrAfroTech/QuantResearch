@@ -36,8 +36,8 @@ describe('buildRiskConfigSnapshot', () => {
     assert.equal(snap.strategies.orb.hard_stop_pct, ORB_HARD_STOP_PCT);
     assert.equal(snap.strategies.orb.partial_lock.activation_mfe, ORB_PARTIAL_LOCK_ACTIVATION_MFE);
     assert.equal(snap.strategies.orb.partial_lock.start_mfe, 0.03);
-    assert.equal(snap.strategies.orb.partial_lock.increment_to_100, 0.05);
-    assert.equal(snap.strategies.orb.partial_lock.increment_after_100, 0.1);
+    assert.equal(snap.strategies.orb.partial_lock.increment_through_48, 0.075);
+    assert.equal(snap.strategies.orb.partial_lock.increment_after_50, 0.1);
     assert.equal(snap.strategies.orb.partial_lock.max_mfe, 10);
     assert.equal(snap.strategies.premarket.max_entry_contracts, PREMARKET_MAX_ENTRY_CONTRACTS);
     assert.equal(snap.strategies.premarket.premium_floor, PREMARKET_MIN_ENTRY_PREMIUM);

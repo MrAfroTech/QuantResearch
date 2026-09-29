@@ -282,7 +282,7 @@ describe('filled broker stop closes the DB position without a quote or another s
 });
 
 describe('0DTE monitors reconcile the resting stop before any option quote', () => {
-  it('checks broker_stop_order_id before getOptionPremium and before broker-flat settlement', () => {
+  it('checks broker_stop_order_id before the option quote and before broker-flat settlement', () => {
     for (const rel of [
       '../orb/orbPositionManager.js',
       '../premarketBreakout/premarketPositionManager.js',
@@ -290,7 +290,7 @@ describe('0DTE monitors reconcile the resting stop before any option quote', () 
     ]) {
       const src = readSrc(rel);
       const stopAt = src.indexOf('await reconcileFilledBrokerStop');
-      const quoteAt = src.indexOf('await getOptionPremium');
+      const quoteAt = src.indexOf('await getZeroDteOptionObservation');
       assert.ok(stopAt > 0, `${rel} must reconcile the resting stop`);
       assert.ok(quoteAt > stopAt, `${rel} must not require a quote before the stop check`);
     }

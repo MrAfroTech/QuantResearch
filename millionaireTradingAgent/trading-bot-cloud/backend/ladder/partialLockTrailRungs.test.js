@@ -4,37 +4,51 @@ import {
   PARTIAL_LOCK_TRAIL_MAX_PCT,
   PARTIAL_LOCK_TRAIL_RUNGS,
   PARTIAL_LOCK_TRAIL_START_PCT,
-  PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
-  PARTIAL_LOCK_TRAIL_STEP_TO_100,
+  PARTIAL_LOCK_TRAIL_STEP_AFTER_50,
+  PARTIAL_LOCK_TRAIL_STEP_THROUGH_48,
   evaluateSteppedPartialLockTrail,
   trailFloorFromPeak,
 } from './partialLockTrailRungs.js';
 
 describe('partial-lock trail rungs', () => {
-  it('starts at 3%, steps 5% through 100%, then 10% through 1000%', () => {
+  it('starts at +3%, steps +7.5 points through +48%, then +10 points from +58%', () => {
     assert.equal(PARTIAL_LOCK_TRAIL_START_PCT, 0.03);
-    assert.equal(PARTIAL_LOCK_TRAIL_STEP_TO_100, 0.05);
-    assert.equal(PARTIAL_LOCK_TRAIL_STEP_AFTER_100, 0.1);
+    assert.equal(PARTIAL_LOCK_TRAIL_STEP_THROUGH_48, 0.075);
+    assert.equal(PARTIAL_LOCK_TRAIL_STEP_AFTER_50, 0.1);
     assert.equal(PARTIAL_LOCK_TRAIL_MAX_PCT, 10);
-    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS[0], 0.03);
-    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS[1], 0.05);
-    assert.ok(PARTIAL_LOCK_TRAIL_RUNGS.includes(1));
-    assert.ok(PARTIAL_LOCK_TRAIL_RUNGS.includes(1.1));
-    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS[PARTIAL_LOCK_TRAIL_RUNGS.length - 1], 10);
-    const at100 = PARTIAL_LOCK_TRAIL_RUNGS.indexOf(1);
-    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS[at100 + 1], 1.1);
+    assert.deepEqual(PARTIAL_LOCK_TRAIL_RUNGS.slice(0, 7), [
+      0.03, 0.105, 0.18, 0.255, 0.33, 0.405, 0.48,
+    ]);
+    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS[7], 0.58);
+    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS[8], 0.68);
+    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS.at(-1), 9.98);
+    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS.includes(0.5), false);
+    assert.equal(PARTIAL_LOCK_TRAIL_RUNGS.includes(1), false);
   });
 
-  it('locks the last increment printed and ratchets only on new highs', () => {
+  it('locks the highest rung the peak has reached and does not skip ahead', () => {
     assert.equal(trailFloorFromPeak(0.029), null);
     assert.equal(trailFloorFromPeak(0.03), 0.03);
-    assert.equal(trailFloorFromPeak(0.07), 0.05);
-    assert.equal(trailFloorFromPeak(0.1), 0.1);
-    assert.equal(trailFloorFromPeak(0.99), 0.95);
-    assert.equal(trailFloorFromPeak(1), 1);
-    assert.equal(trailFloorFromPeak(1.05), 1);
-    assert.equal(trailFloorFromPeak(1.1), 1.1);
-    assert.equal(trailFloorFromPeak(10), 10);
+    assert.equal(trailFloorFromPeak(0.08), 0.03);
+    assert.equal(trailFloorFromPeak(0.105), 0.105);
+    assert.equal(trailFloorFromPeak(0.12), 0.105);
+    assert.equal(trailFloorFromPeak(0.18), 0.18);
+    assert.equal(trailFloorFromPeak(0.255), 0.255);
+    assert.equal(trailFloorFromPeak(0.33), 0.33);
+    assert.equal(trailFloorFromPeak(0.405), 0.405);
+    assert.equal(trailFloorFromPeak(0.48), 0.48);
+    assert.equal(trailFloorFromPeak(0.5), 0.48);
+    assert.equal(trailFloorFromPeak(0.58), 0.58);
+    assert.equal(trailFloorFromPeak(0.63), 0.58);
+    assert.equal(trailFloorFromPeak(0.68), 0.68);
+    assert.equal(trailFloorFromPeak(9.98), 9.98);
+  });
+
+  it('a confirmed +18% peak has passed +3%, +10.5%, and +18% and stops on +18%', () => {
+    const passed = PARTIAL_LOCK_TRAIL_RUNGS.filter((rung) => rung <= 0.18 + 1e-12);
+    assert.deepEqual(passed, [0.03, 0.105, 0.18]);
+    assert.equal(trailFloorFromPeak(0.18), 0.18);
+    assert.equal(trailFloorFromPeak(0.12), 0.105);
   });
 
   it('does not flatten on the tick that first prints an increment', () => {
@@ -47,12 +61,12 @@ describe('partial-lock trail rungs', () => {
     assert.equal(at3.trailFloor, 0.03);
 
     const pullback = evaluateSteppedPartialLockTrail({
-      pnlFrac: 0.03,
-      mfeFrac: 0.07,
+      pnlFrac: 0.105,
+      mfeFrac: 0.12,
       closeReason: 'partial_lock_trail',
     });
     assert.equal(pullback.action, 'close_all');
-    assert.equal(pullback.trailFloor, 0.05);
+    assert.equal(pullback.trailFloor, 0.105);
 
     const past20 = evaluateSteppedPartialLockTrail({
       pnlFrac: 0.22,
@@ -60,14 +74,14 @@ describe('partial-lock trail rungs', () => {
       closeReason: 'partial_lock_trail',
     });
     assert.equal(past20.action, 'hold');
-    assert.equal(past20.trailFloor, 0.2);
+    assert.equal(past20.trailFloor, 0.18);
 
-    const past110 = evaluateSteppedPartialLockTrail({
-      pnlFrac: 1.15,
-      mfeFrac: 1.15,
+    const past58 = evaluateSteppedPartialLockTrail({
+      pnlFrac: 0.63,
+      mfeFrac: 0.63,
       closeReason: 'partial_lock_trail',
     });
-    assert.equal(past110.action, 'hold');
-    assert.equal(past110.trailFloor, 1.1);
+    assert.equal(past58.action, 'hold');
+    assert.equal(past58.trailFloor, 0.58);
   });
 });

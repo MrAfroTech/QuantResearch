@@ -1,8 +1,8 @@
 import {
   PARTIAL_LOCK_TRAIL_MAX_PCT,
   PARTIAL_LOCK_TRAIL_START_PCT,
-  PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
-  PARTIAL_LOCK_TRAIL_STEP_TO_100,
+  PARTIAL_LOCK_TRAIL_STEP_AFTER_50,
+  PARTIAL_LOCK_TRAIL_STEP_THROUGH_48,
 } from '../ladder/partialLockTrailRungs.js';
 import {
   LIVE_PER_TRADE_CAP_FRAC,
@@ -57,8 +57,8 @@ function strategyRisk({
     hard_stop_pct: hardStopPct,
     partial_lock: {
       activation_mfe: partialLockActivationMfe,
-      increment_to_100: PARTIAL_LOCK_TRAIL_STEP_TO_100,
-      increment_after_100: PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
+      increment_through_48: PARTIAL_LOCK_TRAIL_STEP_THROUGH_48,
+      increment_after_50: PARTIAL_LOCK_TRAIL_STEP_AFTER_50,
       max_mfe: PARTIAL_LOCK_TRAIL_MAX_PCT,
       start_mfe: PARTIAL_LOCK_TRAIL_START_PCT,
     },

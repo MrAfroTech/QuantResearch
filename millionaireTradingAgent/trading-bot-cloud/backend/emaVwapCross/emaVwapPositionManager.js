@@ -1,6 +1,6 @@
 import {
   closeOptionOrder,
-  getOptionPremium,
+  getZeroDteOptionObservation,
   cancelBrokerOrder,
   getBrokerOrderStatus,
 } from '../brokerageConnector.js';
@@ -42,6 +42,12 @@ import { shouldKickInitialStop, isFlattenRetryInFlight } from '../ladder/flatten
 import { positionHasConfirmedBrokerLong } from '../ladder/orderFillStatus.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
 import { LADDER_CLOSE_REASON } from '../ladder/ladderConfig.js';
+import {
+  clearMfeFailure,
+  planExcursionUpdate,
+  resolveMonitorPremiums,
+  takeMfeFailureEvent,
+} from '../ladder/mfePrice.js';
 
 async function notifyEmaVwapClose(position, reason, pnlPct, exitPremium) {
   await sendEmaVwapTradeClosedTelegram({
@@ -187,6 +193,39 @@ async function logEmaVwapPartialLockStopReplaceFailed(position, {
   });
 }
 
+async function logEmaVwapMfeObservation(position, details) {
+  if (!details) return;
+  await logEmaVwapEvent({
+    ticker: position.ticker,
+    tradeDate: etDateKey(),
+    eventType: details.type,
+    direction: position.direction,
+    breakoutLevel: position.breakout_level,
+    details: {
+      ...details,
+      position_id: position.id,
+      strike: position.strike,
+      expiration: position.expiration,
+    },
+  });
+}
+
+async function applyEmaVwapExcursion(position, { ratchetPremium, markPremium, selection }) {
+  const planned = planExcursionUpdate(position, { ratchetPremium, markPremium, selection });
+  if (!planned) return null;
+  if (planned.changed) {
+    await updateEmaVwapPositionExcursion(position.id, planned.mfeFrac, planned.maeFrac);
+    position.mfe_pct = planned.mfeFrac;
+    position.mae_pct = planned.maeFrac;
+  }
+  if (planned.advanceEvent) {
+    await logEmaVwapMfeObservation(position, planned.advanceEvent).catch((err) => {
+      console.warn(`[EMA/VWAP] mfe_advance event log failed:`, err.message);
+    });
+  }
+  return planned;
+}
+
 async function logEmaVwapPartialLockTrailEvent(position, {
   exitPremium,
   peakMfe,
@@ -266,26 +305,23 @@ async function syncEmaVwapPartialLockBrokerStop(position, { decision, brokerStop
  */
 async function armEmaVwapPartialLockBeforeLadder(position, {
   currentPremium,
+  markPremium = null,
+  selection = null,
   brokerStop,
   hardStopPct,
   environment,
   onNotify,
 }) {
-  const entry = Number(position.entry_premium);
-  if (!(entry > 0) || !Number.isFinite(Number(currentPremium))) return null;
-
-  const pnlFrac = (Number(currentPremium) - entry) / entry;
-  const mfeFrac = Math.max(Number(position.mfe_pct) || 0, pnlFrac);
-  const maeFrac = Math.min(Number(position.mae_pct) || 0, pnlFrac);
-  if (mfeFrac !== position.mfe_pct || maeFrac !== position.mae_pct) {
-    await updateEmaVwapPositionExcursion(position.id, mfeFrac, maeFrac);
-    position.mfe_pct = mfeFrac;
-    position.mae_pct = maeFrac;
-  }
+  const planned = await applyEmaVwapExcursion(position, {
+    ratchetPremium: currentPremium,
+    markPremium,
+    selection,
+  });
+  if (!planned) return null;
 
   const decision = evaluateEmaVwapPartialLockTrail({
-    pnlFrac,
-    mfeFrac,
+    pnlFrac: planned.pnlFrac,
+    mfeFrac: planned.mfeFrac,
     exitPhase: position.exit_phase,
     hardStopPct,
   });
@@ -300,27 +336,24 @@ async function armEmaVwapPartialLockBeforeLadder(position, {
  */
 async function tryEmaVwapPartialLockTrailClose(position, {
   currentPremium,
+  closePremium = null,
+  markPremium = null,
+  selection = null,
   environment,
   brokerStop,
 }) {
-  const entry = Number(position.entry_premium);
-  if (!(entry > 0) || !Number.isFinite(Number(currentPremium))) return null;
-
-  const pnlFrac = (Number(currentPremium) - entry) / entry;
-  const priorMfe = Number(position.mfe_pct) || 0;
-  const priorMae = Number(position.mae_pct) || 0;
-  const mfeFrac = Math.max(priorMfe, pnlFrac);
-  const maeFrac = Math.min(priorMae, pnlFrac);
-
-  if (mfeFrac !== position.mfe_pct || maeFrac !== position.mae_pct) {
-    await updateEmaVwapPositionExcursion(position.id, mfeFrac, maeFrac);
-    position.mfe_pct = mfeFrac;
-    position.mae_pct = maeFrac;
-  }
+  const planned = await applyEmaVwapExcursion(position, {
+    ratchetPremium: currentPremium,
+    markPremium: markPremium ?? closePremium,
+    selection,
+  });
+  if (!planned) return null;
+  const pnlFrac = planned.pnlFrac;
+  const orderPremium = Number.isFinite(Number(closePremium)) ? Number(closePremium) : Number(currentPremium);
 
   const decision = evaluateEmaVwapPartialLockTrail({
     pnlFrac,
-    mfeFrac,
+    mfeFrac: planned.mfeFrac,
     exitPhase: position.exit_phase,
     hardStopPct: EMA_VWAP_HARD_STOP_PCT,
   });
@@ -349,7 +382,7 @@ async function tryEmaVwapPartialLockTrailClose(position, {
   const settled = await submitAndSettleFullClose({
     position,
     closeQty,
-    currentPremium,
+    currentPremium: orderPremium,
     pnlFrac,
     intendedReason: EMA_VWAP_PARTIAL_LOCK_CLOSE_REASON,
     isTimeStop: false,
@@ -466,9 +499,9 @@ export async function monitorEmaVwapPositions() {
       continue;
     }
 
-    let currentPremium;
+    let observation;
     try {
-      currentPremium = await getOptionPremium(
+      observation = await getZeroDteOptionObservation(
         position.ticker,
         position.direction,
         position.strike,
@@ -476,13 +509,48 @@ export async function monitorEmaVwapPositions() {
       );
     } catch (err) {
       console.warn(`[EMA/VWAP] Premium lookup failed for ${position.ticker}:`, err.message);
+      const failed = takeMfeFailureEvent(`emavwap:${position.id}`, err.message);
+      if (failed) {
+        await logEmaVwapMfeObservation(position, failed).catch((logErr) => {
+          console.warn(`[EMA/VWAP] mfe_observation_failed event log failed:`, logErr.message);
+        });
+      }
       continue;
     }
+
+    const premiums = resolveMonitorPremiums(observation);
+    if (premiums.ladderPremium == null && premiums.ratchetPremium == null) {
+      console.warn(`[EMA/VWAP] Premium lookup failed for ${position.ticker}: no quote`);
+      const failed = takeMfeFailureEvent(`emavwap:${position.id}`, observation.error || 'no_mfe_price');
+      if (failed) {
+        await logEmaVwapMfeObservation(position, failed).catch((logErr) => {
+          console.warn(`[EMA/VWAP] mfe_observation_failed event log failed:`, logErr.message);
+        });
+      }
+      continue;
+    }
+    if (premiums.quoteMissing) {
+      const failed = takeMfeFailureEvent(
+        `emavwap:${position.id}`,
+        observation.error || observation.reason || 'quote_fields_unavailable'
+      );
+      if (failed) {
+        await logEmaVwapMfeObservation(position, failed).catch((logErr) => {
+          console.warn(`[EMA/VWAP] mfe_observation_failed event log failed:`, logErr.message);
+        });
+      }
+    } else {
+      clearMfeFailure(`emavwap:${position.id}`);
+    }
+    const currentPremium = premiums.ladderPremium ?? premiums.ratchetPremium;
+    const ratchetPremium = premiums.ratchetPremium ?? currentPremium;
 
     try {
       if (!timeStop) {
         await armEmaVwapPartialLockBeforeLadder(position, {
-          currentPremium,
+          currentPremium: ratchetPremium,
+          markPremium: currentPremium,
+          selection: observation,
           brokerStop,
           hardStopPct: EMA_VWAP_HARD_STOP_PCT,
           environment,
@@ -491,6 +559,7 @@ export async function monitorEmaVwapPositions() {
           },
         });
       }
+      const mfeLockedByRatchet = timeStop ? null : (Number(position.mfe_pct) || 0);
 
       const action = await handleLadderPositionMonitor(position, {
         currentPremium,
@@ -534,6 +603,14 @@ export async function monitorEmaVwapPositions() {
           }),
       });
 
+      if (
+        mfeLockedByRatchet != null &&
+        (Number(position.mfe_pct) || 0) > mfeLockedByRatchet + 1e-12
+      ) {
+        await updateEmaVwapPositionExcursion(position.id, mfeLockedByRatchet, position.mae_pct);
+        position.mfe_pct = mfeLockedByRatchet;
+      }
+
       if (action?.reason || action?.skipped || action?.pendingClose) {
         actions.push(action);
         continue;
@@ -541,7 +618,10 @@ export async function monitorEmaVwapPositions() {
 
       if (!timeStop) {
         const partialLockAction = await tryEmaVwapPartialLockTrailClose(position, {
-          currentPremium,
+          currentPremium: ratchetPremium,
+          closePremium: currentPremium,
+          markPremium: currentPremium,
+          selection: observation,
           environment,
           brokerStop,
         });

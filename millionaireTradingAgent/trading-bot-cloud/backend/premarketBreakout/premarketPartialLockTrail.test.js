@@ -24,37 +24,37 @@ describe('Premarket profit trail', () => {
     assert.equal(d.inactiveReason, 'below_activation');
   });
 
-  it('fires close_all after peak lifts off a 5% rung and PnL is back at the floor', () => {
+  it('fires close_all after peak lifts off a rung and PnL is back at the floor', () => {
     const d = evaluatePremarketPartialLockTrail({
-      pnlFrac: 0.04,
-      mfeFrac: 0.08,
+      pnlFrac: 0.1,
+      mfeFrac: 0.12,
       exitPhase: 'LADDER:0',
     });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, PREMARKET_PARTIAL_LOCK_CLOSE_REASON);
-    assert.equal(d.peakMfe, 0.08);
-    assert.equal(d.trailFloor, 0.05);
+    assert.equal(d.peakMfe, 0.12);
+    assert.equal(d.trailFloor, 0.105);
   });
 
   it('holds when still above the last printed increment', () => {
     const d = evaluatePremarketPartialLockTrail({
-      pnlFrac: 0.07,
-      mfeFrac: 0.08,
+      pnlFrac: 0.11,
+      mfeFrac: 0.12,
       exitPhase: 'LADDER:0',
     });
     assert.equal(d.action, 'hold');
-    assert.equal(d.trailFloor, 0.05);
+    assert.equal(d.trailFloor, 0.105);
   });
 
   it('uses current pnl as peak when it exceeds stored mfe', () => {
     const d = evaluatePremarketPartialLockTrail({
-      pnlFrac: 0.09,
+      pnlFrac: 0.12,
       mfeFrac: 0.05,
       exitPhase: null,
     });
     assert.equal(d.action, 'hold');
-    assert.equal(d.peakMfe, 0.09);
-    assert.equal(d.trailFloor, 0.05);
+    assert.equal(d.peakMfe, 0.12);
+    assert.equal(d.trailFloor, 0.105);
   });
 
   it('keeps trailing after the old +20% ladder milestone', () => {
@@ -64,7 +64,7 @@ describe('Premarket profit trail', () => {
       exitPhase: 'LADDER:1',
     });
     assert.equal(d.action, 'hold');
-    assert.equal(d.trailFloor, 0.2);
+    assert.equal(d.trailFloor, 0.18);
   });
 
   it('refuses close when past hard stop so hard_stop owns the exit', () => {
@@ -87,7 +87,7 @@ describe('Premarket profit trail', () => {
     });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, PREMARKET_PARTIAL_LOCK_CLOSE_REASON);
-    assert.equal(d.trailFloor, 0.15);
+    assert.equal(d.trailFloor, 0.18);
   });
 });
 
@@ -165,22 +165,22 @@ describe('shouldRaisePartialLockBrokerStop', () => {
       exitPhase: 'LADDER:0',
     });
     assert.equal(first.action, 'hold');
-    assert.equal(first.trailFloor, 0.05);
+    assert.equal(first.trailFloor, 0.03);
     assert.equal(
       shouldRaisePartialLockBrokerStop(
         { ...locked, broker_stop_trigger_price: 1.63, broker_stop_pnl_frac: -0.01 },
         first.trailFloor
       ).desiredTrigger,
-      1.73
+      1.7
     );
 
     const second = evaluatePremarketPartialLockTrail({
-      pnlFrac: 0.1,
-      mfeFrac: 0.1,
+      pnlFrac: 0.12,
+      mfeFrac: 0.12,
       exitPhase: 'LADDER:0',
     });
     assert.equal(second.action, 'hold');
-    assert.equal(second.trailFloor, 0.1);
+    assert.equal(second.trailFloor, 0.105);
     const check = shouldRaisePartialLockBrokerStop(locked, second.trailFloor);
     assert.equal(check.raise, true);
     assert.equal(check.desiredTrigger, 1.82);

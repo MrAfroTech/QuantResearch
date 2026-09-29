@@ -10,8 +10,8 @@ import { EMA_VWAP_MIN_ENTRY_PREMIUM } from '../emaVwapCross/emaVwapConfig.js';
 import {
   PARTIAL_LOCK_TRAIL_MAX_PCT,
   PARTIAL_LOCK_TRAIL_START_PCT,
-  PARTIAL_LOCK_TRAIL_STEP_AFTER_100,
-  PARTIAL_LOCK_TRAIL_STEP_TO_100,
+  PARTIAL_LOCK_TRAIL_STEP_AFTER_50,
+  PARTIAL_LOCK_TRAIL_STEP_THROUGH_48,
 } from '../ladder/partialLockTrailRungs.js';
 import { LIVE_PER_TRADE_CAP_FRAC, livePerTradeCapFracFor } from './liveBudget.js';
 
@@ -25,10 +25,10 @@ describe('account-wide live risk extensions', () => {
     assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.85);
   });
 
-  it('profit trail starts at +3%, steps 5% to 100%, then 10% to 1000%', () => {
+  it('profit trail starts at +3%, steps 7.5 points through 48%, then 10 points', () => {
     assert.equal(PARTIAL_LOCK_TRAIL_START_PCT, 0.03);
-    assert.equal(PARTIAL_LOCK_TRAIL_STEP_TO_100, 0.05);
-    assert.equal(PARTIAL_LOCK_TRAIL_STEP_AFTER_100, 0.1);
+    assert.equal(PARTIAL_LOCK_TRAIL_STEP_THROUGH_48, 0.075);
+    assert.equal(PARTIAL_LOCK_TRAIL_STEP_AFTER_50, 0.1);
     assert.equal(PARTIAL_LOCK_TRAIL_MAX_PCT, 10);
   });
 

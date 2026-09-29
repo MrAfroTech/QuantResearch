@@ -1,29 +1,25 @@
 /**
- * Shared 0DTE profit-trail rungs: arm at +3%, then +5% steps through +100%,
- * then +10% steps through +1000%. Floor is the highest rung the peak has reached.
- * Ratchets up on new highs only; never lowers.
+ * Shared 0DTE profit-trail rungs.
+ * Arm at +3%, then +7.5 percentage points through +48%:
+ *   +3%, +10.5%, +18%, +25.5%, +33%, +40.5%, +48%.
+ * Once the ratchet is in the 50% range, floors increase by +10 points:
+ *   +58%, +68%, … up to the +1000% ceiling.
+ * Floor is the highest rung the peak has reached. It never moves down.
+ * These are protected floors, not sell targets.
  */
 
 export const PARTIAL_LOCK_TRAIL_START_PCT = 0.03;
-export const PARTIAL_LOCK_TRAIL_STEP_TO_100 = 0.05;
-export const PARTIAL_LOCK_TRAIL_STEP_AFTER_100 = 0.10;
+export const PARTIAL_LOCK_TRAIL_STEP_THROUGH_48 = 0.075;
+export const PARTIAL_LOCK_TRAIL_STEP_AFTER_50 = 0.10;
+/** Inclusive ceiling. The last +10 rung at or below this is 9.98 (998%). */
 export const PARTIAL_LOCK_TRAIL_MAX_PCT = 10;
 
-function roundPct(value) {
-  return Math.round(value * 10000) / 10000;
-}
-
-export function buildPartialLockTrailRungs() {
-  const rungs = [PARTIAL_LOCK_TRAIL_START_PCT];
-  for (let pct = PARTIAL_LOCK_TRAIL_STEP_TO_100; pct <= 1.0000001; pct += PARTIAL_LOCK_TRAIL_STEP_TO_100) {
-    rungs.push(roundPct(pct));
-  }
-  for (
-    let pct = 1 + PARTIAL_LOCK_TRAIL_STEP_AFTER_100;
-    pct <= PARTIAL_LOCK_TRAIL_MAX_PCT + 1e-12;
-    pct += PARTIAL_LOCK_TRAIL_STEP_AFTER_100
-  ) {
-    rungs.push(roundPct(pct));
+function buildPartialLockTrailRungs() {
+  const rungs = [];
+  // Basis points avoid 0.075 binary drift (300, 1050, …, 4800, then 5800, 6800, …).
+  for (let bps = 300; bps <= 4800; bps += 750) rungs.push(bps / 10000);
+  for (let bps = 5800; bps <= PARTIAL_LOCK_TRAIL_MAX_PCT * 10000; bps += 1000) {
+    rungs.push(bps / 10000);
   }
   return Object.freeze(rungs);
 }

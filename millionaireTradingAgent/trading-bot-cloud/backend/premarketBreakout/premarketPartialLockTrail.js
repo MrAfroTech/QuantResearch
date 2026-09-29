@@ -1,6 +1,6 @@
 /**
- * Premarket profit trail: arm at +3%, then ratchet the lock floor up in +5%
- * steps through +100% and +10% steps through +1000%. Runs after the shared
+ * Premarket profit trail: arm at +3%, then +7.5 points through +48%, then +10
+ * points from +58%. Runs after the shared
  * ladder poll so hard/soft stops still win on the way down. Does not stop at
  * the old +20% profit-target flatten.
  */

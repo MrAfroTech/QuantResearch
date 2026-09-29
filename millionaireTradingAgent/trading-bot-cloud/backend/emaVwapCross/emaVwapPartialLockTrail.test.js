@@ -28,37 +28,37 @@ describe('EMA/VWAP profit trail', () => {
     assert.equal(d.inactiveReason, 'below_activation');
   });
 
-  it('fires close_all after peak lifts off a 5% rung and PnL is back at the floor', () => {
+  it('fires close_all after peak lifts off a rung and PnL is back at the floor', () => {
     const d = evaluateEmaVwapPartialLockTrail({
-      pnlFrac: 0.04,
-      mfeFrac: 0.08,
+      pnlFrac: 0.1,
+      mfeFrac: 0.12,
       exitPhase: 'LADDER:0',
     });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, EMA_VWAP_PARTIAL_LOCK_CLOSE_REASON);
-    assert.equal(d.peakMfe, 0.08);
-    assert.equal(d.trailFloor, 0.05);
+    assert.equal(d.peakMfe, 0.12);
+    assert.equal(d.trailFloor, 0.105);
   });
 
   it('holds when still above the last printed increment', () => {
     const d = evaluateEmaVwapPartialLockTrail({
-      pnlFrac: 0.07,
-      mfeFrac: 0.08,
+      pnlFrac: 0.11,
+      mfeFrac: 0.12,
       exitPhase: 'LADDER:0',
     });
     assert.equal(d.action, 'hold');
-    assert.equal(d.trailFloor, 0.05);
+    assert.equal(d.trailFloor, 0.105);
   });
 
   it('uses current pnl as peak when it exceeds stored mfe', () => {
     const d = evaluateEmaVwapPartialLockTrail({
-      pnlFrac: 0.09,
+      pnlFrac: 0.12,
       mfeFrac: 0.05,
       exitPhase: null,
     });
     assert.equal(d.action, 'hold');
-    assert.equal(d.peakMfe, 0.09);
-    assert.equal(d.trailFloor, 0.05);
+    assert.equal(d.peakMfe, 0.12);
+    assert.equal(d.trailFloor, 0.105);
   });
 
   it('keeps trailing after the old +20% ladder milestone', () => {
@@ -68,7 +68,7 @@ describe('EMA/VWAP profit trail', () => {
       exitPhase: 'LADDER:1',
     });
     assert.equal(d.action, 'hold');
-    assert.equal(d.trailFloor, 0.2);
+    assert.equal(d.trailFloor, 0.18);
   });
 
   it('refuses close when past hard stop so hard_stop owns the exit', () => {
@@ -91,7 +91,7 @@ describe('EMA/VWAP profit trail', () => {
     });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, EMA_VWAP_PARTIAL_LOCK_CLOSE_REASON);
-    assert.equal(d.trailFloor, 0.15);
+    assert.equal(d.trailFloor, 0.18);
   });
 });
 

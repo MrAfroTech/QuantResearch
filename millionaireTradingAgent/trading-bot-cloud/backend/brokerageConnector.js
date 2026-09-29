@@ -12,6 +12,7 @@ import {
 } from './optionPriceIncrement.js';
 import { computeTradableCashBalance } from './budget/tradableCash.js';
 import { isLadderBrokerStopEnabledForStrategy } from './ladder/ladderConfig.js';
+import { selectMfePrice } from './ladder/mfePrice.js';
 import {
   buildOtoEntryStopBody,
   parsePlacedComplexOrder,
@@ -1455,6 +1456,10 @@ async function tradierFindOption(ticker, direction, strike, expiration) {
     bid: match.bid,
     ask: match.ask,
     mid: premium,
+    last: match.last ?? null,
+    bidDate: match.bid_date ?? null,
+    askDate: match.ask_date ?? null,
+    tradeDate: match.trade_date ?? null,
   };
 }
 
@@ -1559,6 +1564,50 @@ export async function getOptionPremium(ticker, direction, strike, expiration) {
 
   const quote = await fetchQuote(ticker);
   return estimatePremium(ticker, direction, strike, quote.price);
+}
+
+/**
+ * One Tradier chain read for the 0DTE monitors.
+ * `mark` is the same midpoint (then bid, then ask) `getOptionPremium` uses.
+ * `selectedPrice` is the ratchet observation from `selectMfePrice`.
+ * Loss exits keep using `mark`. The ratchet uses `selectedPrice`.
+ */
+export async function getZeroDteOptionObservation(ticker, direction, strike, expiration) {
+  let tradier = null;
+  let tradierError = null;
+  try {
+    tradier = await tradierFindOption(ticker, direction, strike, expiration);
+  } catch (err) {
+    tradierError = err.message;
+  }
+
+  const selection = selectMfePrice({
+    bid: tradier?.bid,
+    ask: tradier?.ask,
+    last: tradier?.last,
+    bidDate: tradier?.bidDate,
+    askDate: tradier?.askDate,
+    tradeDate: tradier?.tradeDate,
+  });
+
+  let mark = tradier?.mid ?? null;
+  if (
+    mark == null ||
+    (!isPaperTrading() && process.env.TASTYTRADE_USERNAME)
+  ) {
+    try {
+      const premium = await getOptionPremium(ticker, direction, strike, expiration);
+      if (premium != null && Number.isFinite(Number(premium))) mark = Number(premium);
+    } catch (err) {
+      if (!tradierError) tradierError = err.message;
+    }
+  }
+
+  return {
+    mark: mark != null && Number.isFinite(Number(mark)) ? Number(mark) : null,
+    ...selection,
+    error: tradierError,
+  };
 }
 
 function estimatePremium(ticker, direction, strike, spotPrice) {

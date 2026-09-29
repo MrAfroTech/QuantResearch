@@ -63,21 +63,55 @@ function normalizeHistoryBars(payload) {
   }));
 }
 
-function normalizeOption(option) {
-  const bid = Number(option.bid);
-  const ask = Number(option.ask);
-  const mid =
-    Number.isFinite(bid) && Number.isFinite(ask) ? (bid + ask) / 2 : null;
+function finiteOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
+function epochOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Quote fields from a Tradier option chain row.
+ * `last`, `bid_date`, `ask_date`, and `trade_date` are on the chain payload
+ * and must survive normalization so MFE can see a newer sale and quote age.
+ * Dates are last-change unix milliseconds.
+ */
+export function optionQuoteFields(option) {
+  if (!option || typeof option !== 'object') {
+    return {
+      bid: null,
+      ask: null,
+      mid: null,
+      last: null,
+      bid_date: null,
+      ask_date: null,
+      trade_date: null,
+    };
+  }
+  const bid = finiteOrNull(option.bid);
+  const ask = finiteOrNull(option.ask);
+  return {
+    bid,
+    ask,
+    mid: bid != null && ask != null ? (bid + ask) / 2 : null,
+    last: finiteOrNull(option.last),
+    bid_date: epochOrNull(option.bid_date),
+    ask_date: epochOrNull(option.ask_date),
+    trade_date: epochOrNull(option.trade_date),
+  };
+}
+
+function normalizeOption(option) {
   return {
     symbol: option.symbol,
     description: option.description,
     option_type: option.option_type,
     strike: Number(option.strike),
     expiration: String(option.expiration_date || option.expiration || '').slice(0, 10),
-    bid: Number.isFinite(bid) ? bid : null,
-    ask: Number.isFinite(ask) ? ask : null,
-    mid,
+    ...optionQuoteFields(option),
     greeks: option.greeks || null,
   };
 }

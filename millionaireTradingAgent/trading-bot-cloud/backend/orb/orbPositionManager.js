@@ -1,4 +1,4 @@
-import { closeOptionOrder, getOptionPremium, cancelBrokerOrder, getBrokerOrderStatus } from '../brokerageConnector.js';
+import { closeOptionOrder, getZeroDteOptionObservation, cancelBrokerOrder, getBrokerOrderStatus } from '../brokerageConnector.js';
 import {
   getOrbOpenPositions,
   updateOrbPositionExcursion,
@@ -37,6 +37,12 @@ import { shouldKickInitialStop, isFlattenRetryInFlight } from '../ladder/flatten
 import { positionHasConfirmedBrokerLong } from '../ladder/orderFillStatus.js';
 import { getStrategyEnvironment } from '../strategyEnvironment.js';
 import { LADDER_CLOSE_REASON } from '../ladder/ladderConfig.js';
+import {
+  clearMfeFailure,
+  planExcursionUpdate,
+  resolveMonitorPremiums,
+  takeMfeFailureEvent,
+} from '../ladder/mfePrice.js';
 
 async function notifyOrbClose(position, reason, pnlPct, exitPremium) {
   await sendOrbTradeClosedTelegram({
@@ -182,6 +188,39 @@ async function logOrbPartialLockStopReplaceFailed(position, {
   });
 }
 
+async function logOrbMfeObservation(position, details) {
+  if (!details) return;
+  await logOrbEvent({
+    ticker: position.ticker,
+    tradeDate: etDateKey(),
+    eventType: details.type,
+    direction: position.direction,
+    breakoutLevel: position.breakout_level,
+    details: {
+      ...details,
+      position_id: position.id,
+      strike: position.strike,
+      expiration: position.expiration,
+    },
+  });
+}
+
+async function applyOrbExcursion(position, { ratchetPremium, markPremium, selection }) {
+  const planned = planExcursionUpdate(position, { ratchetPremium, markPremium, selection });
+  if (!planned) return null;
+  if (planned.changed) {
+    await updateOrbPositionExcursion(position.id, planned.mfeFrac, planned.maeFrac);
+    position.mfe_pct = planned.mfeFrac;
+    position.mae_pct = planned.maeFrac;
+  }
+  if (planned.advanceEvent) {
+    await logOrbMfeObservation(position, planned.advanceEvent).catch((err) => {
+      console.warn(`[ORB] mfe_advance event log failed:`, err.message);
+    });
+  }
+  return planned;
+}
+
 async function logOrbPartialLockTrailEvent(position, {
   exitPremium,
   peakMfe,
@@ -261,26 +300,23 @@ async function syncOrbPartialLockBrokerStop(position, { decision, brokerStop, en
  */
 async function armOrbPartialLockBeforeLadder(position, {
   currentPremium,
+  markPremium = null,
+  selection = null,
   brokerStop,
   hardStopPct,
   environment,
   onNotify,
 }) {
-  const entry = Number(position.entry_premium);
-  if (!(entry > 0) || !Number.isFinite(Number(currentPremium))) return null;
-
-  const pnlFrac = (Number(currentPremium) - entry) / entry;
-  const mfeFrac = Math.max(Number(position.mfe_pct) || 0, pnlFrac);
-  const maeFrac = Math.min(Number(position.mae_pct) || 0, pnlFrac);
-  if (mfeFrac !== position.mfe_pct || maeFrac !== position.mae_pct) {
-    await updateOrbPositionExcursion(position.id, mfeFrac, maeFrac);
-    position.mfe_pct = mfeFrac;
-    position.mae_pct = maeFrac;
-  }
+  const planned = await applyOrbExcursion(position, {
+    ratchetPremium: currentPremium,
+    markPremium,
+    selection,
+  });
+  if (!planned) return null;
 
   const decision = evaluateOrbPartialLockTrail({
-    pnlFrac,
-    mfeFrac,
+    pnlFrac: planned.pnlFrac,
+    mfeFrac: planned.mfeFrac,
     exitPhase: position.exit_phase,
     hardStopPct,
   });
@@ -295,27 +331,24 @@ async function armOrbPartialLockBeforeLadder(position, {
  */
 async function tryOrbPartialLockTrailClose(position, {
   currentPremium,
+  closePremium = null,
+  markPremium = null,
+  selection = null,
   environment,
   brokerStop,
 }) {
-  const entry = Number(position.entry_premium);
-  if (!(entry > 0) || !Number.isFinite(Number(currentPremium))) return null;
-
-  const pnlFrac = (Number(currentPremium) - entry) / entry;
-  const priorMfe = Number(position.mfe_pct) || 0;
-  const priorMae = Number(position.mae_pct) || 0;
-  const mfeFrac = Math.max(priorMfe, pnlFrac);
-  const maeFrac = Math.min(priorMae, pnlFrac);
-
-  if (mfeFrac !== position.mfe_pct || maeFrac !== position.mae_pct) {
-    await updateOrbPositionExcursion(position.id, mfeFrac, maeFrac);
-    position.mfe_pct = mfeFrac;
-    position.mae_pct = maeFrac;
-  }
+  const planned = await applyOrbExcursion(position, {
+    ratchetPremium: currentPremium,
+    markPremium: markPremium ?? closePremium,
+    selection,
+  });
+  if (!planned) return null;
+  const pnlFrac = planned.pnlFrac;
+  const orderPremium = Number.isFinite(Number(closePremium)) ? Number(closePremium) : Number(currentPremium);
 
   const decision = evaluateOrbPartialLockTrail({
     pnlFrac,
-    mfeFrac,
+    mfeFrac: planned.mfeFrac,
     exitPhase: position.exit_phase,
     hardStopPct: ORB_HARD_STOP_PCT,
   });
@@ -344,7 +377,7 @@ async function tryOrbPartialLockTrailClose(position, {
   const settled = await submitAndSettleFullClose({
     position,
     closeQty,
-    currentPremium,
+    currentPremium: orderPremium,
     pnlFrac,
     intendedReason: ORB_PARTIAL_LOCK_CLOSE_REASON,
     isTimeStop: false,
@@ -461,9 +494,9 @@ export async function monitorOrbPositions() {
       continue;
     }
 
-    let currentPremium;
+    let observation;
     try {
-      currentPremium = await getOptionPremium(
+      observation = await getZeroDteOptionObservation(
         position.ticker,
         position.direction,
         position.strike,
@@ -471,14 +504,49 @@ export async function monitorOrbPositions() {
       );
     } catch (err) {
       console.warn(`[ORB] Premium lookup failed for ${position.ticker}:`, err.message);
+      const failed = takeMfeFailureEvent(`orb:${position.id}`, err.message);
+      if (failed) {
+        await logOrbMfeObservation(position, failed).catch((logErr) => {
+          console.warn(`[ORB] mfe_observation_failed event log failed:`, logErr.message);
+        });
+      }
       continue;
     }
+
+    const premiums = resolveMonitorPremiums(observation);
+    if (premiums.ladderPremium == null && premiums.ratchetPremium == null) {
+      console.warn(`[ORB] Premium lookup failed for ${position.ticker}: no quote`);
+      const failed = takeMfeFailureEvent(`orb:${position.id}`, observation.error || 'no_mfe_price');
+      if (failed) {
+        await logOrbMfeObservation(position, failed).catch((logErr) => {
+          console.warn(`[ORB] mfe_observation_failed event log failed:`, logErr.message);
+        });
+      }
+      continue;
+    }
+    if (premiums.quoteMissing) {
+      const failed = takeMfeFailureEvent(
+        `orb:${position.id}`,
+        observation.error || observation.reason || 'quote_fields_unavailable'
+      );
+      if (failed) {
+        await logOrbMfeObservation(position, failed).catch((logErr) => {
+          console.warn(`[ORB] mfe_observation_failed event log failed:`, logErr.message);
+        });
+      }
+    } else {
+      clearMfeFailure(`orb:${position.id}`);
+    }
+    const currentPremium = premiums.ladderPremium ?? premiums.ratchetPremium;
+    const ratchetPremium = premiums.ratchetPremium ?? currentPremium;
 
     try {
       // Arm peak/2 before ladder exits can continue past post-ladder trail sync.
       if (!timeStop) {
         await armOrbPartialLockBeforeLadder(position, {
-          currentPremium,
+          currentPremium: ratchetPremium,
+          markPremium: currentPremium,
+          selection: observation,
           brokerStop,
           hardStopPct: ORB_HARD_STOP_PCT,
           environment,
@@ -487,6 +555,7 @@ export async function monitorOrbPositions() {
           },
         });
       }
+      const mfeLockedByRatchet = timeStop ? null : (Number(position.mfe_pct) || 0);
 
       // Ladder: broker-stop fill check + hard stop + soft stop + milestones.
       // Partial-lock software *close* must NOT run before this.
@@ -532,6 +601,14 @@ export async function monitorOrbPositions() {
           }),
       });
 
+      if (
+        mfeLockedByRatchet != null &&
+        (Number(position.mfe_pct) || 0) > mfeLockedByRatchet + 1e-12
+      ) {
+        await updateOrbPositionExcursion(position.id, mfeLockedByRatchet, position.mae_pct);
+        position.mfe_pct = mfeLockedByRatchet;
+      }
+
       // Ladder already acted (close / scale-out / skip) — do not run partial-lock.
       if (action?.reason || action?.skipped || action?.pendingClose) {
         actions.push(action);
@@ -542,7 +619,10 @@ export async function monitorOrbPositions() {
       // Profit trail after ladder hold (3%→1000% ratchet). Skipped on time-stop.
       if (!timeStop) {
         const partialLockAction = await tryOrbPartialLockTrailClose(position, {
-          currentPremium,
+          currentPremium: ratchetPremium,
+          closePremium: currentPremium,
+          markPremium: currentPremium,
+          selection: observation,
           environment,
           brokerStop,
         });
