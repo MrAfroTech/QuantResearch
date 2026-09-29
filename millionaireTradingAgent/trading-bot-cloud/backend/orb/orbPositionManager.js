@@ -23,7 +23,7 @@ import {
   shouldRaiseOrbPartialLockBrokerStop,
   resolveOrbPartialLockStopFillReason,
 } from './orbPartialLockTrail.js';
-import { handleLadderPositionMonitor, submitAndSettleFullClose } from '../ladder/ladderExit.js';
+import { handleLadderPositionMonitor, reconcileFilledBrokerStop, submitAndSettleFullClose } from '../ladder/ladderExit.js';
 import { createLadderBrokerStopHandlers } from '../ladder/ladderStopOrders.js';
 import { kickInitialStopUntilProtected, buildInitialStopRetryExtras } from '../ladder/initialStopRetry.js';
 import { settleDbOpenIfBrokerFlat } from '../ladder/brokerFlatSync.js';
@@ -447,6 +447,18 @@ export async function monitorOrbPositions() {
           },
         })
       );
+    }
+
+    // Filled protective stop is detected from broker_stop_order_id, not the option quote.
+    let stopReconcile = { booked: null };
+    try {
+      stopReconcile = await reconcileFilledBrokerStop(position, brokerStop);
+    } catch (err) {
+      console.warn(`[ORB] Broker stop fill check failed for ${position.ticker}:`, err.message);
+    }
+    if (stopReconcile?.booked) {
+      actions.push(stopReconcile.booked);
+      continue;
     }
 
     let currentPremium;

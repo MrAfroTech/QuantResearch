@@ -528,6 +528,10 @@ export function createLadderBrokerStopHandlers({
         });
       }
       await fullClosePosition(position.id, exitPremium, pnlPct, closeReason, closeQty);
+      // Same object must not be booked again if this poll continues.
+      position.broker_stop_order_id = null;
+      position.broker_stop_trigger_price = null;
+      position.broker_stop_pnl_frac = null;
 
       if (onNotify) {
         await onNotify(position, closeReason, pnlFrac, exitPremium, closeQty);

@@ -23,7 +23,7 @@ import {
   shouldRaisePartialLockBrokerStop,
   resolvePremarketPartialLockStopFillReason,
 } from './premarketPartialLockTrail.js';
-import { handleLadderPositionMonitor, submitAndSettleFullClose } from '../ladder/ladderExit.js';
+import { handleLadderPositionMonitor, reconcileFilledBrokerStop, submitAndSettleFullClose } from '../ladder/ladderExit.js';
 import { createLadderBrokerStopHandlers } from '../ladder/ladderStopOrders.js';
 import { kickInitialStopUntilProtected, buildInitialStopRetryExtras } from '../ladder/initialStopRetry.js';
 import { settleDbOpenIfBrokerFlat } from '../ladder/brokerFlatSync.js';
@@ -449,6 +449,18 @@ export async function monitorPremarketPositions() {
           },
         })
       );
+    }
+
+    // Filled protective stop is detected from broker_stop_order_id, not the option quote.
+    let stopReconcile = { booked: null };
+    try {
+      stopReconcile = await reconcileFilledBrokerStop(position, brokerStop);
+    } catch (err) {
+      console.warn(`[Premarket] Broker stop fill check failed for ${position.ticker}:`, err.message);
+    }
+    if (stopReconcile?.booked) {
+      actions.push(stopReconcile.booked);
+      continue;
     }
 
     let currentPremium;

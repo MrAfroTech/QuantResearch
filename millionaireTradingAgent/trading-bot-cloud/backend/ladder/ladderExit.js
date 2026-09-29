@@ -832,6 +832,41 @@ async function settlePendingCloseOrder({
   return null;
 }
 
+/**
+ * Book a filled protective broker stop from its resting order id.
+ * Does not read an option quote and does not submit a sell.
+ * `booked` is the onStopFilled result when the DB close was written.
+ * `awaitingFillDetails` means that order is the exit but price/qty are not
+ * printable yet — callers must not relabel it broker_already_flat.
+ */
+export async function reconcileFilledBrokerStop(position, brokerStop) {
+  if (!brokerStop?.enabled || !position?.broker_stop_order_id) {
+    return { booked: null, awaitingFillDetails: false };
+  }
+  if (typeof brokerStop.checkFill !== 'function') {
+    return { booked: null, awaitingFillDetails: false };
+  }
+
+  const fill = await brokerStop.checkFill(position);
+  if (fill?.filled && typeof brokerStop.onStopFilled === 'function') {
+    const booked = await brokerStop.onStopFilled(position, fill);
+    if (booked?.skipped || booked?.reason === 'stop_fill_unconfirmed') {
+      return { booked: null, awaitingFillDetails: true, result: booked };
+    }
+    return { booked, awaitingFillDetails: false };
+  }
+  if (fill?.awaitingFillDetails) {
+    return { booked: null, awaitingFillDetails: true, fill };
+  }
+  if (fill?.status?.isTerminal && !fill?.filled && typeof brokerStop.clearStopState === 'function') {
+    await brokerStop.clearStopState(position);
+    position.broker_stop_order_id = null;
+    position.broker_stop_trigger_price = null;
+    position.broker_stop_pnl_frac = null;
+  }
+  return { booked: null, awaitingFillDetails: false, fill };
+}
+
 export async function handleLadderPositionMonitor(position, {
   currentPremium,
   initialStopPct = LADDER_INITIAL_STOP_PCT,
@@ -861,6 +896,21 @@ export async function handleLadderPositionMonitor(position, {
     };
   }
 
+  // Identifiable stop fill wins over broker_already_flat and does not need a quote.
+  const stopReconcile = await reconcileFilledBrokerStop(position, brokerStop);
+  if (stopReconcile?.booked) {
+    return stopReconcile.booked;
+  }
+  if (stopReconcile?.awaitingFillDetails) {
+    return {
+      position,
+      skipped: true,
+      reason: 'awaiting_stop_fill',
+      awaitingStopFillDetails: true,
+      closeReason: null,
+    };
+  }
+
   if (typeof settleIfBrokerFlat === 'function') {
     try {
       const settled = await settleIfBrokerFlat(position);
@@ -884,7 +934,7 @@ export async function handleLadderPositionMonitor(position, {
   }
 
   const brokerStopActive = !!(brokerStop?.enabled && position.broker_stop_order_id);
-  let skipPollStops = brokerStopActive;
+  const skipPollStops = brokerStopActive;
 
   const confirmedLong = positionHasConfirmedBrokerLong(position);
 
@@ -919,18 +969,6 @@ export async function handleLadderPositionMonitor(position, {
       reason: 'entry_not_filled',
       closeReason: null,
     };
-  }
-
-  if (brokerStop?.enabled && position.broker_stop_order_id) {
-    const fill = await brokerStop.checkFill(position);
-    if (fill?.filled) {
-      return brokerStop.onStopFilled(position, fill);
-    }
-    if (fill?.status?.isTerminal && !fill?.filled && brokerStop.clearStopState) {
-      await brokerStop.clearStopState(position);
-      position.broker_stop_order_id = null;
-      skipPollStops = false;
-    }
   }
 
   const entry = Number(position.entry_premium);
