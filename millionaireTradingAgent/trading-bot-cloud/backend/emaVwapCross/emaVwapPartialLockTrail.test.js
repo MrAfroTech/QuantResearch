@@ -9,7 +9,9 @@ import {
   EMA_VWAP_PARTIAL_LOCK_ACTIVATION_MFE,
   EMA_VWAP_PARTIAL_LOCK_CLOSE_REASON,
   EMA_VWAP_HARD_STOP_PCT,
+  EMA_VWAP_STOP_LOSS_PCT,
 } from './emaVwapConfig.js';
+import { computeStopTriggerPrice } from '../ladder/ladderConfig.js';
 
 describe('EMA/VWAP profit trail', () => {
   it('activation floor default is +3% (tunable)', () => {
@@ -101,10 +103,30 @@ describe('shouldRaiseEmaVwapPartialLockBrokerStop', () => {
     broker_stop_pnl_frac: -0.0175,
   };
 
-  it('raises from the 1.75% loss stop to peak/2', () => {
+  it('raises a resting trigger below the trail floor (0.60 → 0.65)', () => {
     const check = shouldRaiseEmaVwapPartialLockBrokerStop(position, 0.065040650406504);
     assert.equal(check.raise, true);
     assert.equal(check.currentTrigger, 0.6);
+    assert.equal(check.desiredTrigger, 0.65);
+  });
+
+  it('raises a 20% protective stop to the same trail floor', () => {
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.2);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.25);
+    const entry = position.entry_premium;
+    const protective = computeStopTriggerPrice(entry, -EMA_VWAP_STOP_LOSS_PCT);
+    assert.equal(protective, 0.49);
+    assert.notEqual(protective, computeStopTriggerPrice(entry, -0.0175));
+    const check = shouldRaiseEmaVwapPartialLockBrokerStop(
+      {
+        ...position,
+        broker_stop_trigger_price: protective,
+        broker_stop_pnl_frac: -EMA_VWAP_STOP_LOSS_PCT,
+      },
+      0.065040650406504
+    );
+    assert.equal(check.raise, true);
+    assert.equal(check.currentTrigger, 0.49);
     assert.equal(check.desiredTrigger, 0.65);
   });
 

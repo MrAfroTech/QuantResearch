@@ -10,6 +10,15 @@ import {
   POSITION_UNPROTECTED_NO_RESTING_STOP,
 } from './ladderStopOrders.js';
 import { LADDER_CLOSE_REASON } from './ladderConfig.js';
+import { ORB_HARD_STOP_PCT, ORB_STOP_LOSS_PCT } from '../orb/orbConfig.js';
+import {
+  PREMARKET_HARD_STOP_TRIGGER,
+  PREMARKET_STOP_LOSS_PCT,
+} from '../premarketBreakout/premarketConfig.js';
+import {
+  EMA_VWAP_HARD_STOP_PCT,
+  EMA_VWAP_STOP_LOSS_PCT,
+} from '../emaVwapCross/emaVwapConfig.js';
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'ladderStopOrders.js'), 'utf8');
 const connectorSrc = readFileSync(
@@ -40,9 +49,23 @@ describe('resolveBrokerStopCloseReason', () => {
     assert.equal(reason, LADDER_CLOSE_REASON.HARD_STOP);
   });
 
-  it('unchanged without hardStopPct (ORB/EMA default)', () => {
+  it('does not reclassify when hardStopPct is omitted', () => {
     assert.equal(resolveBrokerStopCloseReason(-0.1243, null), LADDER_CLOSE_REASON.STOP_LOSS);
     assert.equal(resolveBrokerStopCloseReason(0.2, null), LADDER_CLOSE_REASON.TRAILING_STOP);
+  });
+
+  it('keeps a 20% fill as stop_loss and a 25% fill as hard_stop for every 0DTE strategy', () => {
+    for (const soft of [ORB_STOP_LOSS_PCT, PREMARKET_STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT]) {
+      assert.equal(soft, 0.2);
+    }
+    for (const hard of [ORB_HARD_STOP_PCT, PREMARKET_HARD_STOP_TRIGGER, EMA_VWAP_HARD_STOP_PCT]) {
+      assert.equal(hard, 0.25);
+      assert.equal(resolveBrokerStopCloseReason(-0.2, hard), LADDER_CLOSE_REASON.STOP_LOSS);
+      assert.equal(resolveBrokerStopCloseReason(-0.25, hard), LADDER_CLOSE_REASON.HARD_STOP);
+      assert.equal(resolveBrokerStopCloseReason(-0.02, hard), LADDER_CLOSE_REASON.STOP_LOSS);
+      assert.equal(resolveBrokerStopCloseReason(-0.0175, hard), LADDER_CLOSE_REASON.STOP_LOSS);
+      assert.equal(resolveBrokerStopCloseReason(-0.01, hard), LADDER_CLOSE_REASON.STOP_LOSS);
+    }
   });
 });
 

@@ -5,7 +5,9 @@ import {
   PREMARKET_PARTIAL_LOCK_ACTIVATION_MFE,
   PREMARKET_PARTIAL_LOCK_CLOSE_REASON,
   PREMARKET_HARD_STOP_TRIGGER,
+  PREMARKET_STOP_LOSS_PCT,
 } from './premarketConfig.js';
+import { computeStopTriggerPrice } from '../ladder/ladderConfig.js';
 
 describe('Premarket profit trail', () => {
   it('activation floor default is +3% (tunable)', () => {
@@ -97,10 +99,30 @@ describe('shouldRaisePartialLockBrokerStop', () => {
     broker_stop_pnl_frac: -0.01,
   };
 
-  it('raises from the 1% loss stop to peak/2 (IWM-62 shape)', () => {
+  it('raises the IWM-62 resting trigger to the trail floor (0.60 → 0.65)', () => {
     const check = shouldRaisePartialLockBrokerStop(position, 0.065040650406504);
     assert.equal(check.raise, true);
     assert.equal(check.currentTrigger, 0.6);
+    assert.equal(check.desiredTrigger, 0.65);
+  });
+
+  it('raises a 20% protective stop to the same trail floor', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.2);
+    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.25);
+    const entry = position.entry_premium;
+    const protective = computeStopTriggerPrice(entry, -PREMARKET_STOP_LOSS_PCT);
+    assert.equal(protective, 0.49);
+    assert.notEqual(protective, computeStopTriggerPrice(entry, -0.01));
+    const check = shouldRaisePartialLockBrokerStop(
+      {
+        ...position,
+        broker_stop_trigger_price: protective,
+        broker_stop_pnl_frac: -PREMARKET_STOP_LOSS_PCT,
+      },
+      0.065040650406504
+    );
+    assert.equal(check.raise, true);
+    assert.equal(check.currentTrigger, 0.49);
     assert.equal(check.desiredTrigger, 0.65);
   });
 
