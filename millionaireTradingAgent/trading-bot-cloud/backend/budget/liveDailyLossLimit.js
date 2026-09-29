@@ -9,7 +9,7 @@ import { getLiveStrategyKeys } from './liveBudget.js';
 import { sendDailyLossLimitTelegram } from '../telegramHandler.js';
 
 /** Flat daily loss that trips the live circuit breaker. */
-export const LIVE_DAILY_LOSS_LIMIT_DOLLARS = 25;
+export const LIVE_DAILY_LOSS_LIMIT_DOLLARS = 35;
 
 export const DAILY_LOSS_LIMIT_BLOCK_REASON =
   `Live daily loss limit reached ($${LIVE_DAILY_LOSS_LIMIT_DOLLARS}) — new entries blocked for today`;

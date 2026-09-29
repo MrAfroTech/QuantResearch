@@ -92,10 +92,10 @@ export const ORB_LIVE_PER_TRADE_CAP_FRAC = LIVE_PER_TRADE_CAP_FRAC;
 export const ORB_MAX_ENTRY_CONTRACTS = 1;
 
 /**
- * Hard off: no live ORB entries and no paper ORB order attempts.
- * Scan/FSM may still update the dashboard. Set true to restore entries.
+ * ORB order attempts. False blocks live and paper entries; scan/FSM still updates.
+ * Live vs paper still follows orb_environment.
  */
-export const ORB_ENTRIES_ENABLED = false;
+export const ORB_ENTRIES_ENABLED = true;
 export const ORB_ENTRIES_DISABLED_REASON = 'orb_entries_disabled';
 
 /** ORB entry sizing — 1-contract hard cap + $1 opening commission. */

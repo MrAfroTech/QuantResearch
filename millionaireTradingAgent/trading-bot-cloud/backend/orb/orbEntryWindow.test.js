@@ -92,8 +92,8 @@ describe('ORB production entry/sizing constants', () => {
     assert.equal(sizing.affordable, false);
   });
 
-  it('disables ORB live and paper entry attempts', () => {
-    assert.equal(ORB_ENTRIES_ENABLED, false);
+  it('allows ORB live and paper entry attempts', () => {
+    assert.equal(ORB_ENTRIES_ENABLED, true);
     const orbExec = readFileSync(join(here, 'orbExecutor.js'), 'utf8');
     assert.match(orbExec, /ORB_ENTRIES_ENABLED/);
     assert.match(orbExec, /ORB_ENTRIES_DISABLED_REASON/);

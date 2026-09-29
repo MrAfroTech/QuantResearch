@@ -61,14 +61,18 @@ const dailyPnl = computeDailyPnl({ realizedToday: -500, unrealizedOpen: -400 });
 assert(dailyPnl === -900, 'daily P&L should sum realized and unrealized');
 
 assert(
-  shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -25 }),
-  '$25 loss should trip breaker'
+  shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -35 }),
+  '$35 loss should trip breaker'
 );
 assert(
-  !shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -24.99 }),
-  'loss under $25 should not trip breaker'
+  !shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -34.99 }),
+  'loss under $35 should not trip breaker'
 );
-assert(LIVE_DAILY_LOSS_LIMIT_DOLLARS === 25, 'daily loss limit is $25');
+assert(
+  !shouldTriggerDailyLossLimit({ baselineBalance: 10_000, dailyPnl: -25 }),
+  '$25 loss should not trip the $35 breaker'
+);
+assert(LIVE_DAILY_LOSS_LIMIT_DOLLARS === 35, 'daily loss limit is $35');
 
 const unrealized = computeUnrealizedPnl(
   { entry_premium: 1.0, quantity: 2 },

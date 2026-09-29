@@ -48,6 +48,6 @@ describe('buildRiskConfigSnapshot', () => {
     assert.equal(snap.strategies.emavwap.soft_stop_pct, EMA_VWAP_STOP_LOSS_PCT);
     assert.equal(snap.strategies.emavwap.hard_stop_pct, EMA_VWAP_HARD_STOP_PCT);
     assert.equal(snap.strategies.orb.premium_floor, snap.strategies.premarket.premium_floor);
-    assert.equal(snap.orb_entries_enabled, false);
+    assert.equal(snap.orb_entries_enabled, true);
   });
 });
