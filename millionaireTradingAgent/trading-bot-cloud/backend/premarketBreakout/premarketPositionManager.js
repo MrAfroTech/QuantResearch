@@ -408,8 +408,8 @@ export async function monitorPremarketPositions() {
     const brokerStop = createLadderBrokerStopHandlers({
       strategy: 'premarket',
       environment,
-      // Premarket: resting broker / replaceStop baseline tracks flat SOFT (1%);
-      // hard 1.75% is fill-attribution / poll backstop. After +3% MFE, partial-lock
+      // Premarket: resting broker / replaceStop baseline tracks flat SOFT (20%);
+      // hard 25% is fill-attribution / poll backstop. After +3% MFE, partial-lock
       // raises this same order to peak/2 (pre-milestone only).
       initialStopPct: ivStops.softStopPct,
       // Fills past this ceiling (e.g. stop_market slip) attribute as hard_stop + slippage log.

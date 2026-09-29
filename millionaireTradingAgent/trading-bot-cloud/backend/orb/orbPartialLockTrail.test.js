@@ -72,7 +72,7 @@ describe('ORB profit trail', () => {
 
   it('refuses close when past hard stop so hard_stop owns the exit', () => {
     const d = evaluateOrbPartialLockTrail({
-      pnlFrac: -0.222,
+      pnlFrac: -0.25,
       mfeFrac: 0.037,
       exitPhase: 'LADDER:0',
       hardStopPct: ORB_HARD_STOP_PCT,

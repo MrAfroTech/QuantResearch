@@ -71,7 +71,7 @@ describe('EMA/VWAP profit trail', () => {
 
   it('refuses close when past hard stop so hard_stop owns the exit', () => {
     const d = evaluateEmaVwapPartialLockTrail({
-      pnlFrac: -0.222,
+      pnlFrac: -0.25,
       mfeFrac: 0.037,
       exitPhase: 'LADDER:0',
       hardStopPct: EMA_VWAP_HARD_STOP_PCT,

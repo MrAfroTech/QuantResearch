@@ -26,7 +26,7 @@ import { sendCloseFailedTelegram } from './telegramHandler.js';
 
 const MAX_POSITIONS = 3;
 /**
- * Primary soft stop (poll). Flat 1.75% of premium — matches EMA/VWAP.
+ * Primary soft stop (poll). Flat 1.75% of premium. Swing only.
  * Hard backstop is SWING_HARD_STOP_PCT (2%), not shared LADDER_HARD_STOP_PCT.
  */
 const STOP_LOSS_PCT = 0.0175;
