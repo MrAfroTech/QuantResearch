@@ -9,6 +9,7 @@ import {
   replaceLadderBrokerStop,
   POSITION_UNPROTECTED_NO_RESTING_STOP,
 } from './ladderStopOrders.js';
+import { isBrokerDryRun, replaceOptionStopOrder } from '../brokerageConnector.js';
 import { LADDER_CLOSE_REASON } from './ladderConfig.js';
 import { ORB_HARD_STOP_PCT, ORB_STOP_LOSS_PCT } from '../orb/orbConfig.js';
 import {
@@ -163,15 +164,17 @@ describe('replaceLadderBrokerStop prefers atomic PUT', () => {
     assert.deepEqual(calls.map((c) => c[0]), ['put']);
   });
 
-  it('falls back to cancel-verify-place and refuses to POST while the old stop is still working', async () => {
+  it('keeps the working stop when PUT is not confirmed and does not sell again', async () => {
     const calls = [];
-    const result = await replaceLadderBrokerStop(pos(), {
+    const position = pos();
+    const result = await replaceLadderBrokerStop(position, {
       strategy: 'orb',
       environment: 'live',
       initialStopPct: 0.0175,
       stopPnlFrac: 0.038,
       replaceStopOrder: async () => {
         calls.push('put');
+        assert.equal(position.broker_stop_order_id, '499954177');
         return { resting: false, reason: 'not_resting' };
       },
       cancelStop: async () => {
@@ -180,7 +183,7 @@ describe('replaceLadderBrokerStop prefers atomic PUT', () => {
       },
       verifyTerminated: async () => {
         calls.push('verify');
-        return { terminated: false, reason: 'still_working' };
+        return { terminated: true };
       },
       placeStop: async () => {
         calls.push('place');
@@ -188,11 +191,15 @@ describe('replaceLadderBrokerStop prefers atomic PUT', () => {
       },
     });
     assert.equal(result.placed, false);
-    assert.equal(result.reason, 'still_working');
-    assert.deepEqual(calls, ['put', 'cancel', 'verify']);
+    assert.equal(result.reason, 'not_resting');
+    assert.equal(result.keptPriorStop, true);
+    assert.equal(result.unprotected, false);
+    assert.equal(position.broker_stop_order_id, '499954177');
+    assert.equal(position.broker_stop_trigger_price, 0.91);
+    assert.deepEqual(calls, ['put']);
   });
 
-  it('writes position_unprotected_no_resting_stop when place and restore both fail', async () => {
+  it('does not mark a working stop unprotected when place would fail', async () => {
     const position = pos();
     const result = await replaceLadderBrokerStop(position, {
       strategy: 'orb',
@@ -204,22 +211,170 @@ describe('replaceLadderBrokerStop prefers atomic PUT', () => {
         position.broker_stop_order_id = null;
         return { cancelled: true };
       },
-      verifyTerminated: async () => ({ terminated: true }),
       placeStop: async () => ({ placed: false, reason: 'uncovered' }),
     });
     assert.equal(result.placed, false);
-    assert.equal(result.unprotected, true);
-    assert.equal(result.reason, POSITION_UNPROTECTED_NO_RESTING_STOP);
-    assert.equal(position.broker_stop_order_id, null);
+    assert.equal(result.unprotected, false);
+    assert.equal(result.keptPriorStop, true);
+    assert.notEqual(result.reason, POSITION_UNPROTECTED_NO_RESTING_STOP);
+    assert.equal(position.broker_stop_order_id, '499954177');
+    assert.equal(position.broker_stop_pnl_frac, -0.0175);
   });
 
-  it('wires PUT /accounts/{id}/orders/{orderId} without a prior DELETE', () => {
+  it('adopts the replacement only after it is confirmed resting', async () => {
+    const calls = [];
+    const position = pos({
+      id: 120,
+      direction: 'PUT',
+      entry_premium: 0.99,
+      broker_stop_order_id: '510288226',
+      broker_stop_trigger_price: 0.79,
+      broker_stop_pnl_frac: -0.2,
+    });
+    const result = await replaceLadderBrokerStop(position, {
+      strategy: 'premarket',
+      environment: 'live',
+      initialStopPct: 0.2,
+      stopPnlFrac: 0.03,
+      replaceStopOrder: async (_p, args) => {
+        calls.push(['put', args.existingOrderId, args.stopTrigger]);
+        assert.equal(position.broker_stop_order_id, '510288226');
+        assert.equal(position.broker_stop_trigger_price, 0.79);
+        return {
+          orderId: '510288999',
+          resting: true,
+          replaced: true,
+          stopTrigger: args.stopTrigger,
+        };
+      },
+      cancelStop: async () => {
+        calls.push(['cancel']);
+        throw new Error('must not cancel a confirmed replacement');
+      },
+      placeStop: async () => {
+        calls.push(['place']);
+        throw new Error('must not submit a second sell');
+      },
+    });
+    assert.equal(result.placed, true);
+    assert.equal(result.replaced, true);
+    assert.equal(result.stopTrigger, 1.02);
+    assert.equal(position.broker_stop_order_id, '510288999');
+    assert.equal(position.broker_stop_trigger_price, 1.02);
+    assert.deepEqual(calls, [['put', '510288226', 1.02]]);
+  });
+
+  it('keeps the $0.79 stop when OAuth invalid_grant rejects the ratchet replace', async () => {
+    const calls = [];
+    const oauthError = new Error(
+      'Tastytrade OAuth token refresh failed: 400 {"error_code":"invalid_grant","error_description":"Grant revoked"}'
+    );
+    const position = pos({
+      id: 120,
+      ticker: 'SPY',
+      direction: 'PUT',
+      entry_premium: 0.99,
+      broker_stop_order_id: '510288226',
+      broker_stop_trigger_price: 0.79,
+      broker_stop_pnl_frac: -0.2,
+    });
+    const result = await replaceLadderBrokerStop(position, {
+      strategy: 'premarket',
+      environment: 'live',
+      initialStopPct: 0.2,
+      stopPnlFrac: 0.03,
+      replaceStopOrder: async (_p, args) => {
+        calls.push(['put', args.stopTrigger]);
+        assert.equal(position.broker_stop_order_id, '510288226');
+        throw oauthError;
+      },
+      cancelStop: async () => {
+        calls.push(['cancel']);
+        return { cancelled: true };
+      },
+      placeStop: async () => {
+        calls.push(['place']);
+        return { placed: true, orderId: 'second-sell' };
+      },
+      closePosition: async () => {
+        calls.push(['market-sell']);
+      },
+    });
+    assert.equal(result.placed, false);
+    assert.equal(result.keptPriorStop, true);
+    assert.equal(result.unprotected, false);
+    assert.match(result.reason, /invalid_grant/);
+    assert.match(result.reason, /Grant revoked/);
+    assert.equal(position.broker_stop_order_id, '510288226');
+    assert.equal(position.broker_stop_trigger_price, 0.79);
+    assert.equal(position.broker_stop_pnl_frac, -0.2);
+    assert.equal(result.stopTrigger, 0.79);
+    assert.equal(result.stopPnlFrac, -0.2);
+    assert.deepEqual(calls, [['put', 1.02]]);
+  });
+
+  it('wires PUT replace and does not cancel a working stop before confirmation', () => {
     assert.match(connectorSrc, /method: 'PUT'/);
     assert.match(connectorSrc, /tastytradeReplaceStopOrderWithCredentials/);
     assert.match(connectorSrc, /includeLegs: false/);
-    const replaceFn = src.slice(src.indexOf('export async function replaceLadderBrokerStop'));
+    assert.match(connectorSrc, /export function isBrokerDryRun\(/);
+    const replaceFn = src.slice(
+      src.indexOf('export async function replaceLadderBrokerStop'),
+      src.indexOf('export async function checkLadderBrokerStopFill')
+    );
+    assert.match(replaceFn, /replaceStopOrder/);
+    assert.match(replaceFn, /keeping prior protective stop/);
+    assert.doesNotMatch(replaceFn, /cancelStop/);
+    assert.doesNotMatch(replaceFn, /cancel-verify-place/);
     const putIdx = replaceFn.indexOf('replaceStopOrder');
-    const cancelIdx = replaceFn.indexOf('cancelStop(position');
-    assert.ok(putIdx > 0 && putIdx < cancelIdx, 'PUT replace must run before cancel fallback');
+    const adoptIdx = replaceFn.indexOf('applyPlacedStopToPosition');
+    assert.ok(putIdx > 0 && adoptIdx > putIdx);
+  });
+});
+
+describe('isBrokerDryRun', () => {
+  it('resolves without throwing and dry-run replaces do not call the broker', async () => {
+    const previous = process.env.BROKER_DRY_RUN;
+    try {
+      delete process.env.BROKER_DRY_RUN;
+      assert.equal(typeof isBrokerDryRun, 'function');
+      assert.doesNotThrow(() => isBrokerDryRun());
+      assert.equal(isBrokerDryRun(), false);
+
+      const dryId = await replaceOptionStopOrder(
+        { quantity: 1 },
+        {
+          existingOrderId: 'DRYRUN-STOP-120',
+          quantity: 1,
+          stopTrigger: 1.02,
+          environment: 'live',
+          strategy: 'premarket',
+        }
+      );
+      assert.equal(dryId.dryRun, true);
+      assert.equal(dryId.resting, true);
+      assert.equal(dryId.replaced, true);
+      assert.equal(dryId.stopTrigger, 1.02);
+      assert.match(dryId.orderId, /^DRYRUN-STOP-/);
+
+      process.env.BROKER_DRY_RUN = 'true';
+      assert.equal(isBrokerDryRun(), true);
+      const flagged = await replaceOptionStopOrder(
+        { quantity: 1 },
+        {
+          existingOrderId: '510288226',
+          quantity: 1,
+          stopTrigger: 1.02,
+          environment: 'live',
+          strategy: 'premarket',
+        }
+      );
+      assert.equal(flagged.dryRun, true);
+      assert.equal(flagged.resting, true);
+      assert.equal(flagged.replacesOrderId, '510288226');
+    } finally {
+      if (previous === undefined) delete process.env.BROKER_DRY_RUN;
+      else process.env.BROKER_DRY_RUN = previous;
+    }
   });
 });

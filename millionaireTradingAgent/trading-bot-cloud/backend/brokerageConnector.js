@@ -839,6 +839,16 @@ function isPaperTrading() {
   return process.env.PAPER_TRADING !== 'false';
 }
 
+/**
+ * True only when this process must not send a live stop replace.
+ * Default is false: a missing flag must not throw and must not skip live protection.
+ * Simulated DRYRUN-* order ids are detected by the caller, not by this flag.
+ */
+export function isBrokerDryRun() {
+  const flag = String(process.env.BROKER_DRY_RUN ?? '').trim().toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes';
+}
+
 function isTastytradeSandbox() {
   return process.env.TASTYTRADE_SANDBOX !== 'false';
 }

@@ -3,7 +3,6 @@ import {
   getBrokerOrderStatus,
   replaceOptionStopOrder,
   submitOptionStopOrder,
-  verifyBrokerOrderTerminated,
 } from '../brokerageConnector.js';
 import {
   brokerStopFillIsConfirmed,
@@ -24,7 +23,7 @@ function inferCloseReasonFromStopPnl(stopPnlFrac) {
   return Number(stopPnlFrac) < 0 ? LADDER_CLOSE_REASON.STOP_LOSS : LADDER_CLOSE_REASON.TRAILING_STOP;
 }
 
-/** Distinct event when cancel/place and restore both fail — position has no resting stop. */
+/** Distinct event when a stop place fails and no protective stop is resting. */
 export const POSITION_UNPROTECTED_NO_RESTING_STOP = 'position_unprotected_no_resting_stop';
 
 async function persistUnprotectedNoRestingStop(strategy, position, details) {
@@ -230,6 +229,22 @@ export async function cancelLadderBrokerStop(position, { strategy, environment, 
   }
 }
 
+function keptPriorProtectiveStop(position, prior, reason, error = null) {
+  position.broker_stop_order_id = prior.broker_stop_order_id;
+  position.broker_stop_trigger_price = prior.broker_stop_trigger_price;
+  position.broker_stop_pnl_frac = prior.broker_stop_pnl_frac;
+  return {
+    placed: false,
+    reason,
+    keptPriorStop: true,
+    unprotected: false,
+    orderId: prior.broker_stop_order_id,
+    stopTrigger: prior.broker_stop_trigger_price,
+    stopPnlFrac: prior.broker_stop_pnl_frac,
+    error,
+  };
+}
+
 export async function replaceLadderBrokerStop(position, {
   strategy,
   environment,
@@ -239,8 +254,6 @@ export async function replaceLadderBrokerStop(position, {
   updateBrokerStopState,
   replaceStopOrder = replaceOptionStopOrder,
   placeStop = placeLadderBrokerStop,
-  cancelStop = cancelLadderBrokerStop,
-  verifyTerminated = verifyBrokerOrderTerminated,
 } = {}) {
   if (!isLadderBrokerStopEnabledForStrategy(strategy)) {
     return { placed: false, reason: 'disabled' };
@@ -261,7 +274,9 @@ export async function replaceLadderBrokerStop(position, {
     broker_stop_pnl_frac: position.broker_stop_pnl_frac ?? null,
   };
 
-  // Prefer Tastytrade PUT replace — atomic, no naked window, no second STC.
+  // A working protective stop stays until Tastytrade accepts the PUT replace.
+  // Two resting STCs cannot coexist, so a failed replace must not cancel first
+  // and must not POST a second sell. The ratchet retries this same PUT.
   if (prior.broker_stop_order_id) {
     try {
       const replaced = await replaceStopOrder(position, {
@@ -296,58 +311,24 @@ export async function replaceLadderBrokerStop(position, {
         );
         return placed;
       }
-      console.warn(
-        `[LadderStop][${strategy}] PUT replace not resting #${position.id} ` +
-          `reason=${replaced?.reason || 'unknown'} — falling back to cancel-verify-place`
+      console.error(
+        `[LadderStop][${strategy}] replace not confirmed #${position.id} ` +
+          `reason=${replaced?.reason || 'not_resting'} ` +
+          `— keeping prior protective stop ${prior.broker_stop_order_id} ` +
+          `trigger=$${prior.broker_stop_trigger_price ?? 'n/a'}`
+      );
+      return keptPriorProtectiveStop(
+        position,
+        prior,
+        replaced?.reason || 'replace_not_confirmed'
       );
     } catch (err) {
-      console.warn(
-        `[LadderStop][${strategy}] PUT replace failed #${position.id}: ${err.message} ` +
-          `— falling back to cancel-verify-place`
+      console.error(
+        `[LadderStop][${strategy}] replace failed #${position.id}: ${err.message} ` +
+          `— keeping prior protective stop ${prior.broker_stop_order_id} ` +
+          `trigger=$${prior.broker_stop_trigger_price ?? 'n/a'}`
       );
-    }
-  }
-
-  // Fallback: two resting STCs cannot coexist (live 422 cannot_close / uncovered).
-  // Cancel, confirm the old order is fully terminated, then POST the new stop.
-  let cancelled = { cancelled: false };
-  if (prior.broker_stop_order_id) {
-    cancelled = await cancelStop(position, {
-      strategy,
-      environment,
-      updateBrokerStopState,
-    });
-    if (cancelled?.cancelled) {
-      position.broker_stop_order_id = null;
-      position.broker_stop_trigger_price = null;
-      position.broker_stop_pnl_frac = null;
-    } else {
-      return {
-        placed: false,
-        reason: cancelled?.reason || 'prior_stop_cancel_unconfirmed',
-        cancelled: false,
-      };
-    }
-
-    const released = await verifyTerminated(prior.broker_stop_order_id, {
-      environment,
-      strategy,
-    });
-    if (released?.filled) {
-      return {
-        placed: false,
-        reason: 'prior_stop_filled',
-        cancelled: true,
-        filled: true,
-      };
-    }
-    if (!released?.terminated) {
-      return {
-        placed: false,
-        reason: released?.reason || 'prior_stop_still_working',
-        cancelled: true,
-        verified: false,
-      };
+      return keptPriorProtectiveStop(position, prior, err.message, err);
     }
   }
 
@@ -362,38 +343,18 @@ export async function replaceLadderBrokerStop(position, {
 
   if (placed?.placed) {
     applyPlacedStopToPosition(position, placed);
-    return { ...placed, replacedVia: prior.broker_stop_order_id ? 'cancel_verify_place' : 'place' };
+    return { ...placed, replacedVia: 'place' };
   }
 
-  let restored = { placed: false };
-  if (prior.broker_stop_pnl_frac != null) {
-    console.error(
-      `[LadderStop][${strategy}] replace place failed #${position.id} ` +
-        `reason=${placed?.reason || 'unknown'} — restoring prior stop ` +
-        `pnlFrac=${prior.broker_stop_pnl_frac}`
-    );
-    restored = await placeStop(position, {
-      strategy,
-      environment,
-      initialStopPct,
-      stopPnlFrac: prior.broker_stop_pnl_frac,
-      milestonesPct,
-      updateBrokerStopState,
-    });
-    if (restored?.placed) {
-      applyPlacedStopToPosition(position, restored);
-    }
-  }
-
-  const unprotected = !restored?.placed && !position.broker_stop_order_id;
+  const unprotected = !position.broker_stop_order_id;
   if (unprotected) {
     await persistUnprotectedNoRestingStop(strategy, position, {
-      old_broker_order_id: prior.broker_stop_order_id,
-      old_trigger_price: prior.broker_stop_trigger_price,
+      old_broker_order_id: null,
+      old_trigger_price: null,
       desired_trigger_price: params.stopTrigger,
       desired_pnl_frac: params.stopPnlFrac,
       place_reason: placed?.reason || 'replace_place_failed',
-      restore_reason: restored?.reason || (prior.broker_stop_pnl_frac == null ? 'no_prior_frac' : 'restore_failed'),
+      restore_reason: 'no_prior_stop',
     });
   }
 
@@ -402,8 +363,8 @@ export async function replaceLadderBrokerStop(position, {
     reason: unprotected
       ? POSITION_UNPROTECTED_NO_RESTING_STOP
       : (placed?.reason || 'replace_place_failed'),
-    restored: Boolean(restored?.placed),
-    restoredOrderId: restored?.orderId ?? null,
+    restored: false,
+    restoredOrderId: null,
     unprotected,
     error: placed?.error,
   };
