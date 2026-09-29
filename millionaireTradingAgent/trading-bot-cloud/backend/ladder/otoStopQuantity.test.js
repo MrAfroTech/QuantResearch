@@ -12,6 +12,9 @@ import {
   restingStopIdAfterAlign,
 } from './otoStopQuantity.js';
 import { shouldAlertEntryFillQty } from './entryFillAlerts.js';
+import { ORB_STOP_LOSS_PCT } from '../orb/orbConfig.js';
+import { PREMARKET_STOP_LOSS_PCT } from '../premarketBreakout/premarketConfig.js';
+import { EMA_VWAP_STOP_LOSS_PCT } from '../emaVwapCross/emaVwapConfig.js';
 
 function stopStatus(qty, status = 'Live', extras = {}) {
   return {
@@ -502,7 +505,20 @@ describe('fill-based stop trigger', () => {
     assert.equal(isStopPriceInvalidRejection({ rejectReason: 'order cancelled' }), false);
   });
 
-  it('recomputes the ORB SPY #85 trigger from the $0.67 fill, not the $0.715 mid', () => {
+  it('applies the current 20% 0DTE stop to a fill, not the retired 1% trigger', () => {
+    for (const stopPct of [ORB_STOP_LOSS_PCT, PREMARKET_STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT]) {
+      assert.equal(stopPct, 0.2);
+      const params = fillBasedStopParams(
+        { stopTrigger: 0.99, stopPnlFrac: -stopPct, orderType: 'stop' },
+        1
+      );
+      assert.equal(params.fromFill, true);
+      assert.equal(params.stopTrigger, 0.8);
+      assert.notEqual(params.stopTrigger, 0.99);
+    }
+  });
+
+  it('recomputes the historical ORB SPY #85 trigger from the $0.67 fill, not the $0.715 mid', () => {
     const params = fillBasedStopParams(
       { stopTrigger: 0.71, stopPnlFrac: -0.01, orderType: 'stop' },
       0.67

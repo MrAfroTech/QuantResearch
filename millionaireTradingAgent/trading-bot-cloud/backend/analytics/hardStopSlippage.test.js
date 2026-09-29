@@ -7,6 +7,8 @@ import {
   normalizeHardStopSlippageEvent,
   resolveDisplayHardStopSlippage,
 } from './hardStopSlippage.js';
+import { PREMARKET_STOP_LOSS_PCT } from '../premarketBreakout/premarketConfig.js';
+import { computeStopTriggerPrice } from '../ladder/ladderConfig.js';
 
 describe('normalizeHardStopSlippageEvent', () => {
   it('parses QQQ −$4 slip shape', () => {
@@ -156,6 +158,29 @@ describe('resolveDisplayHardStopSlippage', () => {
     // 0.40 * (1 - 0.20) = 0.32
     assert.equal(display.trigger_price, 0.32);
     assert.equal(display.slippage_dollars, 6);
+  });
+
+  it('rebases a Premarket broker-stop fill onto the 20% resting trigger', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.2);
+    const display = resolveDisplayHardStopSlippage({
+      strategy: 'premarket',
+      entry_premium: 1.13,
+      trigger_price: 1.11,
+      fill_price: 1,
+      quantity: 1,
+      slippage_dollars: -11,
+      slippage_pct_of_entry: -0.0973,
+      escalated: false,
+      limit_price: null,
+      limit_price_present: true,
+    });
+    const trigger = computeStopTriggerPrice(1.13, -PREMARKET_STOP_LOSS_PCT);
+    // 1.13 * 0.80 = 0.904 → $0.90. Stored $1.11 stays on the event, not the display.
+    assert.equal(trigger, 0.9);
+    assert.equal(display.trigger_price, 0.9);
+    assert.notEqual(display.trigger_price, 1.11);
+    assert.equal(display.slippage_dollars, 10);
+    assert.ok(Math.abs(display.slippage_pct_of_entry - (1 - 0.9) / 1.13) < 1e-12);
   });
 
   it('leaves poll-path market escalation numbers untouched', () => {

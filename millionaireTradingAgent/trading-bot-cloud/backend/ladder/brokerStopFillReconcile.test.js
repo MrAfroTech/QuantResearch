@@ -9,6 +9,7 @@ import {
 } from './ladderExit.js';
 import { createLadderBrokerStopHandlers } from './ladderStopOrders.js';
 import { LADDER_CLOSE_REASON } from './ladderConfig.js';
+import { ORB_HARD_STOP_PCT, ORB_STOP_LOSS_PCT } from '../orb/orbConfig.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -20,11 +21,11 @@ function readSrc(rel) {
  * Real onStopFilled, with checkFill stubbed so the test does not call Tastytrade.
  * checkFill respects a cleared broker_stop_order_id so a second pass cannot rebook.
  */
-function brokerStopForFill(fill, { fullClosePosition, onNotify, hardStopPct = null } = {}) {
+function brokerStopForFill(fill, { fullClosePosition, onNotify, hardStopPct = ORB_HARD_STOP_PCT } = {}) {
   const handlers = createLadderBrokerStopHandlers({
     strategy: 'orb',
     environment: 'live',
-    initialStopPct: 0.0175,
+    initialStopPct: ORB_STOP_LOSS_PCT,
     hardStopPct,
     updateBrokerStopState: async () => {},
     fullClosePosition,
@@ -72,6 +73,11 @@ describe('filled broker stop closes the DB position without a quote or another s
     const position = openPosition();
     const entry = position.entry_premium;
     const fillPrice = 0.86;
+    const pnlFrac = (fillPrice - entry) / entry;
+    assert.equal(ORB_STOP_LOSS_PCT, 0.2);
+    assert.equal(ORB_HARD_STOP_PCT, 0.25);
+    assert.ok(pnlFrac <= -ORB_STOP_LOSS_PCT);
+    assert.ok(pnlFrac > -ORB_HARD_STOP_PCT);
     const brokerStop = brokerStopForFill(
       {
         fillPrice,

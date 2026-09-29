@@ -22,6 +22,15 @@ import {
   computeHardStopCloseLimitPrice,
 } from './ladderConfig.js';
 import { resetFlattenUntilClosedStateForTests } from './flattenUntilClosed.js';
+import { ORB_HARD_STOP_PCT, ORB_STOP_LOSS_PCT } from '../orb/orbConfig.js';
+import {
+  PREMARKET_HARD_STOP_TRIGGER,
+  PREMARKET_STOP_LOSS_PCT,
+} from '../premarketBreakout/premarketConfig.js';
+import {
+  EMA_VWAP_HARD_STOP_PCT,
+  EMA_VWAP_STOP_LOSS_PCT,
+} from '../emaVwapCross/emaVwapConfig.js';
 
 afterEach(() => {
   resetFlattenUntilClosedStateForTests();
@@ -514,9 +523,9 @@ describe('handleLadderPositionMonitor close_all fill gate', () => {
         }),
       },
       {
-        currentPremium: 0.815,
-        initialStopPct: 0.01,
-        hardStopPct: 0.0175,
+        currentPremium: 0.69,
+        initialStopPct: ORB_STOP_LOSS_PCT,
+        hardStopPct: ORB_HARD_STOP_PCT,
         isTimeStop: false,
         fullPositionExits: true,
         updateExcursion: async () => {},
@@ -539,27 +548,51 @@ describe('handleLadderPositionMonitor close_all fill gate', () => {
   });
 });
 
-describe('evaluateLadderExit full-position (ORB/Premarket)', () => {
+describe('evaluateLadderExit full-position (ORB/Premarket/EMA)', () => {
   const base = {
     exitPhase: 'LADDER:0',
     contractsOpen: 5,
     entryContracts: 5,
-    initialStopPct: 0.01,
-    hardStopPct: 0.0175,
+    initialStopPct: ORB_STOP_LOSS_PCT,
+    hardStopPct: ORB_HARD_STOP_PCT,
     fullPositionExits: true,
   };
 
-  it('hard stop closes the entire book', () => {
-    const d = evaluateLadderExit({ ...base, pnlFrac: -0.02 });
+  it('uses the approved 20% initial and 25% hard stops, not 1% / 1.75% / 2%', () => {
+    const retired = [0.01, 0.0175, 0.02];
+    for (const [soft, hard] of [
+      [ORB_STOP_LOSS_PCT, ORB_HARD_STOP_PCT],
+      [PREMARKET_STOP_LOSS_PCT, PREMARKET_HARD_STOP_TRIGGER],
+      [EMA_VWAP_STOP_LOSS_PCT, EMA_VWAP_HARD_STOP_PCT],
+    ]) {
+      assert.equal(soft, 0.2);
+      assert.equal(hard, 0.25);
+      assert.equal(retired.includes(soft), false);
+      assert.equal(retired.includes(hard), false);
+    }
+    assert.equal(base.initialStopPct, 0.2);
+    assert.equal(base.hardStopPct, 0.25);
+  });
+
+  it('hard stop closes the entire book at -25%', () => {
+    const d = evaluateLadderExit({ ...base, pnlFrac: -0.25 });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, LADDER_CLOSE_REASON.HARD_STOP);
     assert.equal(d.contracts, 5);
   });
 
+  it('does not hard-stop the retired 1.75% or 2% loss', () => {
+    for (const pnlFrac of [-0.0175, -0.02]) {
+      const d = evaluateLadderExit({ ...base, pnlFrac });
+      assert.equal(d.action, 'hold');
+      assert.notEqual(d.reason, LADDER_CLOSE_REASON.HARD_STOP);
+    }
+  });
+
   it('does not hard-stop when skipHardStop is set (zero-fill / no broker long)', () => {
     const d = evaluateLadderExit({
       ...base,
-      pnlFrac: -0.12,
+      pnlFrac: -0.26,
       skipHardStop: true,
       skipPollStops: true,
     });
@@ -569,7 +602,7 @@ describe('evaluateLadderExit full-position (ORB/Premarket)', () => {
   it('still time-stops even when skipHardStop is set', () => {
     const d = evaluateLadderExit({
       ...base,
-      pnlFrac: -0.12,
+      pnlFrac: -0.26,
       skipHardStop: true,
       skipPollStops: true,
       isTimeStop: true,
@@ -578,11 +611,17 @@ describe('evaluateLadderExit full-position (ORB/Premarket)', () => {
     assert.equal(d.reason, LADDER_CLOSE_REASON.TIME_STOP);
   });
 
-  it('soft stop closes the entire book', () => {
-    const d = evaluateLadderExit({ ...base, pnlFrac: -0.012 });
+  it('soft stop closes the entire book at -20%', () => {
+    const d = evaluateLadderExit({ ...base, pnlFrac: -0.2 });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, LADDER_CLOSE_REASON.STOP_LOSS);
     assert.equal(d.contracts, 5);
+  });
+
+  it('does not soft-stop the retired 1% loss', () => {
+    const d = evaluateLadderExit({ ...base, pnlFrac: -0.01 });
+    assert.equal(d.action, 'hold');
+    assert.notEqual(d.reason, LADDER_CLOSE_REASON.STOP_LOSS);
   });
 
   it('time-stop flatten closes the entire book', () => {
@@ -610,7 +649,7 @@ describe('evaluateLadderExit full-position (ORB/Premarket)', () => {
     assert.equal(d.action, 'hold');
   });
 
-  it('EMA/Swing without the flag still scale out on the first rung', () => {
+  it('without the full-position flag still scale out on the first rung', () => {
     const d = evaluateLadderExit({
       ...base,
       fullPositionExits: false,
