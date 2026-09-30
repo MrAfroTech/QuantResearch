@@ -31,6 +31,29 @@ function parseClosedAtMs(closedAt) {
 }
 
 /**
+ * Pure 20-minute countdown from a stop-loss close.
+ * @returns {{ blocked: boolean, remainingMs: number, closedAt: string|null }}
+ */
+export function evaluateStopLossCooldown(closedAt, now = Date.now()) {
+  const closedMs = parseClosedAtMs(closedAt);
+  const closedAtText = closedAt != null ? String(closedAt) : null;
+  if (closedMs == null) {
+    return { blocked: false, remainingMs: 0, closedAt: closedAtText };
+  }
+
+  const elapsed = now - closedMs;
+  if (elapsed >= STOP_LOSS_REENTRY_COOLDOWN_MS) {
+    return { blocked: false, remainingMs: 0, closedAt: closedAtText };
+  }
+
+  return {
+    blocked: true,
+    remainingMs: STOP_LOSS_REENTRY_COOLDOWN_MS - elapsed,
+    closedAt: closedAtText,
+  };
+}
+
+/**
  * @param {'swing'|'orb'|'premarket'|'emavwap'} strategy
  * @param {string} ticker
  * @param {string} direction
@@ -55,22 +78,7 @@ export async function getStopLossReentryCooldown({ strategy, ticker, direction }
     LIMIT 1
   `;
 
-  const closedAt = rows[0]?.closed_at ?? null;
-  const closedMs = parseClosedAtMs(closedAt);
-  if (closedMs == null) {
-    return { blocked: false, remainingMs: 0, closedAt };
-  }
-
-  const elapsed = Date.now() - closedMs;
-  if (elapsed >= STOP_LOSS_REENTRY_COOLDOWN_MS) {
-    return { blocked: false, remainingMs: 0, closedAt: closedAt != null ? String(closedAt) : null };
-  }
-
-  return {
-    blocked: true,
-    remainingMs: STOP_LOSS_REENTRY_COOLDOWN_MS - elapsed,
-    closedAt: closedAt != null ? String(closedAt) : null,
-  };
+  return evaluateStopLossCooldown(rows[0]?.closed_at ?? null);
 }
 
 export function formatCooldownRemaining(remainingMs) {

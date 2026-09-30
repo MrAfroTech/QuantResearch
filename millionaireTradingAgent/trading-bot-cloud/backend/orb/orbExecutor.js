@@ -70,6 +70,10 @@ import { checkLiveEntryGate } from '../budget/liveEntryGate.js';
 import { DAILY_LOSS_LIMIT_BLOCK_REASON } from '../budget/liveDailyLossLimit.js';
 import { getSameDayReentryGate } from '../entryReentryGate.js';
 import {
+  formatCooldownRemaining,
+  getStopLossReentryCooldown,
+} from '../entryCooldown.js';
+import {
   getOrbPremarketLevelCollisionGate,
   DUPLICATE_CORRELATED_LEVEL_REASON,
 } from '../zeroDte/orbPremarketLevelCollision.js';
@@ -248,12 +252,31 @@ async function tryExecuteEntry(entry) {
     return { executed: false, reason: liveGate.reason };
   }
 
+  const cooldown = await getStopLossReentryCooldown({
+    strategy: 'orb',
+    ticker: entry.symbol,
+    direction: entry.direction,
+  });
+  if (cooldown.blocked) {
+    const remaining = formatCooldownRemaining(cooldown.remainingMs);
+    console.log(
+      `[ORB] Stop-loss cooldown — skipping ${entry.symbol} ${entry.direction} (${remaining} left)`
+    );
+    await sendOrbSignalNotExecutedTelegram({
+      ticker: entry.symbol,
+      direction: entry.direction,
+      reason: `Stop-loss cooldown — ${remaining} left before ${entry.symbol} ${entry.direction} can re-enter`,
+    });
+    return { executed: false, reason: 'stop_loss_cooldown', remainingMs: cooldown.remainingMs };
+  }
+
   const reentry = await getSameDayReentryGate({
     strategy: 'orb',
     ticker: entry.symbol,
     direction: entry.direction,
   });
-  if (reentry.blocked) {
+  // ORB stop_loss uses the 20-minute countdown above. Other real losses stay blocked for the day.
+  if (reentry.blocked && reentry.lastCloseReason !== 'stop_loss') {
     console.log(
       `[ORB] Same-day loss block — skipping ${entry.symbol} ${entry.direction}` +
         ` (last today: ${reentry.lastCloseReason} pnl=${reentry.lastPnl})`
