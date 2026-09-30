@@ -39,26 +39,26 @@ import { reconcileFilledBrokerStop } from './ladderExit.js';
 import { LADDER_CLOSE_REASON } from './ladderConfig.js';
 
 describe('0DTE initial loss tolerance', () => {
-  it('uses a 20% initial protective stop for Premarket, EMA/VWAP, and ORB', () => {
-    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.2);
-    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.2);
-    assert.equal(ORB_STOP_LOSS_PCT, 0.2);
+  it('uses a 15% initial protective stop for Premarket, EMA/VWAP, and ORB', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.15);
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.15);
+    assert.equal(ORB_STOP_LOSS_PCT, 0.15);
     assert.equal(PREMARKET_STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT);
     assert.equal(EMA_VWAP_STOP_LOSS_PCT, ORB_STOP_LOSS_PCT);
   });
 
-  it('uses a 25% hard stop for Premarket, EMA/VWAP, and ORB', () => {
-    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.25);
-    assert.equal(PREMARKET_HARD_STOP_PCT, 0.25);
-    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.25);
-    assert.equal(ORB_HARD_STOP_PCT, 0.25);
+  it('uses an 18.5% hard stop for Premarket, EMA/VWAP, and ORB', () => {
+    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.185);
+    assert.equal(PREMARKET_HARD_STOP_PCT, 0.185);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.185);
+    assert.equal(ORB_HARD_STOP_PCT, 0.185);
     const iv = computePremarketIvStopPcts(0.4);
-    assert.equal(iv.softStopPct, 0.2);
-    assert.equal(iv.hardStopPct, 0.25);
+    assert.equal(iv.softStopPct, 0.15);
+    assert.equal(iv.hardStopPct, 0.185);
     assert.equal(iv.ivMult, 1);
   });
 
-  it('rests the broker stop at -20% of entry for every 0DTE strategy', () => {
+  it('rests the broker stop at -15% of entry for every 0DTE strategy', () => {
     for (const initialStopPct of [
       PREMARKET_STOP_LOSS_PCT,
       EMA_VWAP_STOP_LOSS_PCT,
@@ -73,8 +73,8 @@ describe('0DTE initial loss tolerance', () => {
         },
         { initialStopPct }
       );
-      assert.equal(params.stopPnlFrac, -0.2);
-      assert.equal(params.stopTrigger, 0.8);
+      assert.equal(params.stopPnlFrac, -0.15);
+      assert.equal(params.stopTrigger, 0.85);
     }
   });
 });

@@ -505,15 +505,15 @@ describe('fill-based stop trigger', () => {
     assert.equal(isStopPriceInvalidRejection({ rejectReason: 'order cancelled' }), false);
   });
 
-  it('applies the current 20% 0DTE stop to a fill, not the retired 1% trigger', () => {
+  it('applies the current 15% 0DTE stop to a fill, not the retired 1% trigger', () => {
     for (const stopPct of [ORB_STOP_LOSS_PCT, PREMARKET_STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT]) {
-      assert.equal(stopPct, 0.2);
+      assert.equal(stopPct, 0.15);
       const params = fillBasedStopParams(
         { stopTrigger: 0.99, stopPnlFrac: -stopPct, orderType: 'stop' },
         1
       );
       assert.equal(params.fromFill, true);
-      assert.equal(params.stopTrigger, 0.8);
+      assert.equal(params.stopTrigger, 0.85);
       assert.notEqual(params.stopTrigger, 0.99);
     }
   });

@@ -123,7 +123,7 @@ describe('matchHardStopSlippage', () => {
 });
 
 describe('resolveDisplayHardStopSlippage', () => {
-  it('rebases an ORB broker-stop fill onto the 20% resting trigger', () => {
+  it('rebases an ORB broker-stop fill onto the 15% resting trigger', () => {
     const display = resolveDisplayHardStopSlippage({
       strategy: 'orb',
       entry_premium: 1.255,
@@ -136,13 +136,13 @@ describe('resolveDisplayHardStopSlippage', () => {
       limit_price: null,
       limit_price_present: true,
     });
-    // 1.255 * (1 - 0.20) = 1.004 → $1.00
-    assert.equal(display.trigger_price, 1.00);
-    assert.equal(display.slippage_dollars, 17);
-    assert.ok(Math.abs(display.slippage_pct_of_entry - (1.17 - 1.00) / 1.255) < 1e-12);
+    // 1.255 * (1 - 0.15) = 1.06675 → $1.07
+    assert.equal(display.trigger_price, 1.07);
+    assert.equal(display.slippage_dollars, 10);
+    assert.ok(Math.abs(display.slippage_pct_of_entry - (1.17 - 1.07) / 1.255) < 1e-12);
   });
 
-  it('rebases EMA/VWAP broker-stop fills onto the 20% resting trigger', () => {
+  it('rebases EMA/VWAP broker-stop fills onto the 15% resting trigger', () => {
     const display = resolveDisplayHardStopSlippage({
       strategy: 'emavwap',
       entry_premium: 0.4,
@@ -155,13 +155,13 @@ describe('resolveDisplayHardStopSlippage', () => {
       limit_price: null,
       limit_price_present: true,
     });
-    // 0.40 * (1 - 0.20) = 0.32
-    assert.equal(display.trigger_price, 0.32);
-    assert.equal(display.slippage_dollars, 6);
+    // 0.40 * (1 - 0.15) = 0.34
+    assert.equal(display.trigger_price, 0.34);
+    assert.equal(display.slippage_dollars, 4);
   });
 
-  it('rebases a Premarket broker-stop fill onto the 20% resting trigger', () => {
-    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.2);
+  it('rebases a Premarket broker-stop fill onto the 15% resting trigger', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.15);
     const display = resolveDisplayHardStopSlippage({
       strategy: 'premarket',
       entry_premium: 1.13,
@@ -175,12 +175,12 @@ describe('resolveDisplayHardStopSlippage', () => {
       limit_price_present: true,
     });
     const trigger = computeStopTriggerPrice(1.13, -PREMARKET_STOP_LOSS_PCT);
-    // 1.13 * 0.80 = 0.904 → $0.90. Stored $1.11 stays on the event, not the display.
-    assert.equal(trigger, 0.9);
-    assert.equal(display.trigger_price, 0.9);
+    // 1.13 * 0.85 = 0.9605 → $0.96. Stored $1.11 stays on the event, not the display.
+    assert.equal(trigger, 0.96);
+    assert.equal(display.trigger_price, 0.96);
     assert.notEqual(display.trigger_price, 1.11);
-    assert.equal(display.slippage_dollars, 10);
-    assert.ok(Math.abs(display.slippage_pct_of_entry - (1 - 0.9) / 1.13) < 1e-12);
+    assert.equal(display.slippage_dollars, 4);
+    assert.ok(Math.abs(display.slippage_pct_of_entry - (1 - 0.96) / 1.13) < 1e-12);
   });
 
   it('leaves poll-path market escalation numbers untouched', () => {
@@ -249,7 +249,7 @@ describe('formatHardStopSlippageLabel', () => {
         limit_price: null,
         limit_price_present: true,
       }),
-      '$1.00→$1.17 (+$17.00 / +13.55%) · broker stop'
+      '$1.07→$1.17 (+$10.00 / +7.97%) · broker stop'
     );
   });
 

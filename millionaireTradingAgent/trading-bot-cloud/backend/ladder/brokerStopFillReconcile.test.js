@@ -66,7 +66,7 @@ function openPosition(overrides = {}) {
 }
 
 describe('filled broker stop closes the DB position without a quote or another sell', () => {
-  it('books the IWM-shaped stop fill at the broker price and stop_loss reason', async () => {
+  it('books the IWM-shaped stop fill at the broker price and hard_stop reason', async () => {
     const closes = [];
     const sells = [];
     const settles = [];
@@ -74,10 +74,9 @@ describe('filled broker stop closes the DB position without a quote or another s
     const entry = position.entry_premium;
     const fillPrice = 0.86;
     const pnlFrac = (fillPrice - entry) / entry;
-    assert.equal(ORB_STOP_LOSS_PCT, 0.2);
-    assert.equal(ORB_HARD_STOP_PCT, 0.25);
-    assert.ok(pnlFrac <= -ORB_STOP_LOSS_PCT);
-    assert.ok(pnlFrac > -ORB_HARD_STOP_PCT);
+    assert.equal(ORB_STOP_LOSS_PCT, 0.15);
+    assert.equal(ORB_HARD_STOP_PCT, 0.185);
+    assert.ok(pnlFrac <= -ORB_HARD_STOP_PCT);
     const brokerStop = brokerStopForFill(
       {
         fillPrice,
@@ -121,12 +120,12 @@ describe('filled broker stop closes the DB position without a quote or another s
     });
 
     assert.equal(result.brokerStopFill, true);
-    assert.equal(result.reason, LADDER_CLOSE_REASON.STOP_LOSS);
+    assert.equal(result.reason, LADDER_CLOSE_REASON.HARD_STOP);
     assert.equal(result.exitPremium, 0.86);
     assert.equal(closes.length, 1);
     assert.equal(closes[0][0], position.id);
     assert.equal(closes[0][1], 0.86);
-    assert.equal(closes[0][3], LADDER_CLOSE_REASON.STOP_LOSS);
+    assert.equal(closes[0][3], LADDER_CLOSE_REASON.HARD_STOP);
     assert.equal(closes[0][4], 1);
     assert.equal(position.broker_stop_order_id, null);
     assert.deepEqual(sells, []);
@@ -187,10 +186,10 @@ describe('filled broker stop closes the DB position without a quote or another s
     const first = await reconcileFilledBrokerStop(position, brokerStop);
     const second = await reconcileFilledBrokerStop(position, brokerStop);
 
-    assert.equal(first.booked.reason, LADDER_CLOSE_REASON.STOP_LOSS);
+    assert.equal(first.booked.reason, LADDER_CLOSE_REASON.HARD_STOP);
     assert.equal(second.booked, null);
     assert.equal(closes.length, 1);
-    assert.equal(closes[0][3], LADDER_CLOSE_REASON.STOP_LOSS);
+    assert.equal(closes[0][3], LADDER_CLOSE_REASON.HARD_STOP);
   });
 
   it('does not relabel an identifiable stop as broker_already_flat while fill details are still landing', async () => {
