@@ -285,7 +285,8 @@ describe('alignOtoChildStopToFilledQty', () => {
       },
     });
     assert.equal(isOtoChildAlreadyDead({ status: 'rejected', isFilled: false }), true);
-    assert.equal(isCancelFailureBecauseOrderDead('cannot_update_order'), true);
+    assert.equal(isCancelFailureBecauseOrderDead('cannot_update_order'), false);
+    assert.equal(isCancelFailureBecauseOrderDead('Tastytrade /orders/1 failed: 404 not found'), true);
     assert.equal(cancels, 0);
     assert.equal(result.replaced, true);
     assert.equal(result.aligned, true);
@@ -294,13 +295,42 @@ describe('alignOtoChildStopToFilledQty', () => {
     assert.deepEqual(placed, [1]);
   });
 
-  it('places when cancel throws cannot_update_order even if GET did not classify rejected', async () => {
+  it('retains a working contingent child when cancel returns cannot_update_order (#125)', async () => {
+    const placed = [];
+    const result = await alignOtoChildStopToFilledQty({
+      stopOrderId: '510567214',
+      filledQuantity: 1,
+      expectedTrigger: 1.32,
+      getStatus: async () => stopStatus(1, 'Contingent', { stopTrigger: 1.31 }),
+      cancelOrder: async () => ({
+        cancelled: false,
+        reason:
+          'Tastytrade /orders/510567214 failed: 422 {"error":{"code":"cannot_update_order","message":"the order could not be cancelled"}}',
+      }),
+      placeStop: async (qty) => {
+        placed.push(qty);
+        return { orderId: 'second-sell' };
+      },
+    });
+    assert.deepEqual(placed, []);
+    assert.equal(result.aligned, false);
+    assert.equal(result.replaced, false);
+    assert.equal(result.reason, 'contingent_child_retained');
+    assert.equal(result.stopOrderId, '510567214');
+    assert.equal(result.stopProtectionState, 'CANCEL_REQUESTED_UNCONFIRMED');
+    assert.equal(
+      restingStopIdAfterAlign({ aligned: result, otoStopOrderId: '510567214' }),
+      '510567214'
+    );
+  });
+
+  it('preserves stop identity when broker state is unknown and cancel is refused', async () => {
     const placed = [];
     const result = await alignOtoChildStopToFilledQty({
       stopOrderId: '500760357',
       filledQuantity: 1,
       expectedTrigger: 1.1,
-      getStatus: async () => stopStatus(1, 'Unknown', { stopTrigger: 1.12 }),
+      getStatus: async () => ({ error: 'lookup_timeout', status: 'error' }),
       cancelOrder: async () => {
         throw new Error(
           'Tastytrade /orders/500760357 failed: 422 {"error":{"code":"cannot_update_order"}}'
@@ -311,8 +341,32 @@ describe('alignOtoChildStopToFilledQty', () => {
         return { orderId: 'fill-based-stop' };
       },
     });
+    assert.deepEqual(placed, []);
+    assert.equal(result.replaced, false);
+    assert.equal(result.stopOrderId, '500760357');
+    assert.equal(
+      restingStopIdAfterAlign({ aligned: result, otoStopOrderId: '500760357' }),
+      '500760357'
+    );
+  });
+
+  it('replaces only when cancel proves the child order is gone', async () => {
+    const placed = [];
+    const result = await alignOtoChildStopToFilledQty({
+      stopOrderId: '500760357',
+      filledQuantity: 1,
+      expectedTrigger: 1.1,
+      getStatus: async () => stopStatus(1, 'Live', { stopTrigger: 1.12 }),
+      cancelOrder: async () => {
+        throw new Error('Tastytrade /orders/500760357 failed: 404 not found');
+      },
+      placeStop: async (qty) => {
+        placed.push(qty);
+        return { orderId: 'fill-based-stop' };
+      },
+    });
     assert.equal(result.replaced, true);
-    assert.equal(result.aligned, true);
+    assert.equal(result.stopOrderId, 'fill-based-stop');
     assert.deepEqual(placed, [1]);
   });
 

@@ -214,12 +214,12 @@ async function tryExecuteEntry(entry) {
   if (!isWithinOrbEntryWindow()) {
     console.log(
       `[ORB] ${OUTSIDE_ENTRY_WINDOW_REASON} — skipping ${entry.symbol} ${entry.direction}` +
-        ` (entries only 9:30–11:00 AM ET)`
+        ` (entries only 9:30 AM–3:05 PM ET)`
     );
     await sendOrbSignalNotExecutedTelegram({
       ticker: entry.symbol,
       direction: entry.direction,
-      reason: 'Outside ORB entry window (9:30–11:00 AM ET) — new entries blocked',
+      reason: 'Outside ORB entry window (9:30 AM–3:05 PM ET) — new entries blocked',
     });
     return { executed: false, reason: OUTSIDE_ENTRY_WINDOW_REASON };
   }

@@ -625,16 +625,28 @@ async function tastytradeGetOrderStatusWithCredentials(credentials, sessionRef, 
   return normalizeOrderStatus(json);
 }
 
-async function resolveOptionSymbolForPosition(position) {
-  const option =
-    (await tastytradeFindOption(
+/**
+ * Resolve the OCC symbol with the same credential environment as the stop order.
+ * A lookup failure (including a revoked sandbox grant) must not abort the stop:
+ * the OCC built from the position is enough to submit the protective order.
+ */
+async function resolveOptionSymbolForPosition(position, credentials, sessionRef) {
+  try {
+    const option = await tastytradeFindOptionWithCredentials(
+      credentials,
+      sessionRef,
       position.ticker,
       position.direction,
       position.strike,
       position.expiration
-    )) || null;
-
-  if (option?.optionSymbol) return option.optionSymbol;
+    );
+    if (option?.optionSymbol) return option.optionSymbol;
+  } catch (err) {
+    console.warn(
+      `[brokerageConnector] Option symbol lookup failed for ${position?.ticker} ` +
+        `env=${credentials?.sandbox ? 'sandbox' : 'live'}: ${err.message} — using OCC fallback`
+    );
+  }
 
   return buildOccSymbol(
     toTastytradeSymbol(position.ticker),
@@ -642,6 +654,12 @@ async function resolveOptionSymbolForPosition(position) {
     position.direction,
     position.strike
   );
+}
+
+/** Test hook. Production sessions stay in module scope. */
+export function resetTastytradeSessionsForTests() {
+  clearSessionRef(liveSessionToken);
+  clearSessionRef(paperSessionToken);
 }
 
 async function tastytradeSubmitOrderWithCredentials(credentials, sessionRef, { accountNumber, optionSymbol, quantity, price, action }) {
@@ -1018,6 +1036,15 @@ async function tastytradeFetchNestedChain(ticker) {
   return tastytradeRequest(`/option-chains/${encodeURIComponent(symbol)}/nested`);
 }
 
+async function tastytradeFetchNestedChainWithCredentials(credentials, sessionRef, ticker) {
+  const symbol = toTastytradeSymbol(ticker);
+  return tastytradeRequestWithCredentials(
+    credentials,
+    sessionRef,
+    `/option-chains/${encodeURIComponent(symbol)}/nested`
+  );
+}
+
 function extractExpirations(chainJson) {
   const root = chainJson?.data?.items?.[0] || chainJson?.data || chainJson;
   return root?.expirations || [];
@@ -1162,8 +1189,7 @@ async function tastytradeGetOptionChain(ticker, direction, spotPrice, targetExpi
   };
 }
 
-async function tastytradeFindOption(ticker, direction, strike, expiration) {
-  const chainJson = await tastytradeFetchNestedChain(ticker);
+function optionFromNestedChain(chainJson, ticker, direction, strike, expiration) {
   const expirations = extractExpirations(chainJson);
   const targetExp = normalizeExpirationDate(expiration);
 
@@ -1193,6 +1219,20 @@ async function tastytradeFindOption(ticker, direction, strike, expiration) {
     ask: strikeMatch.ask,
     mid: premium,
   };
+}
+
+async function tastytradeFindOption(ticker, direction, strike, expiration) {
+  const chainJson = await tastytradeFetchNestedChain(ticker);
+  return optionFromNestedChain(chainJson, ticker, direction, strike, expiration);
+}
+
+async function tastytradeFindOptionWithCredentials(credentials, sessionRef, ticker, direction, strike, expiration) {
+  const chainJson = await tastytradeFetchNestedChainWithCredentials(
+    credentials,
+    sessionRef,
+    ticker
+  );
+  return optionFromNestedChain(chainJson, ticker, direction, strike, expiration);
 }
 
 async function tastytradeSubmitOrder({ accountNumber, optionSymbol, quantity, price, action }) {
@@ -2513,7 +2553,7 @@ export async function submitOptionStopOrder(position, {
 
   const { credentials, sessionRef } = getCredentialsForOrderEnvironment(orderEnvironment);
   const accountNumber = await tastytradeGetAccountWithCredentials(credentials, sessionRef);
-  const optionSymbol = await resolveOptionSymbolForPosition(position);
+  const optionSymbol = await resolveOptionSymbolForPosition(position, credentials, sessionRef);
 
   const result = await tastytradeSubmitStopOrderWithCredentials(credentials, sessionRef, {
     accountNumber,
@@ -2664,7 +2704,7 @@ export async function replaceOptionStopOrder(position, {
 
   const { credentials, sessionRef } = getCredentialsForOrderEnvironment(orderEnvironment);
   const accountNumber = await tastytradeGetAccountWithCredentials(credentials, sessionRef);
-  const optionSymbol = await resolveOptionSymbolForPosition(position);
+  const optionSymbol = await resolveOptionSymbolForPosition(position, credentials, sessionRef);
 
   const result = await tastytradeReplaceStopOrderWithCredentials(credentials, sessionRef, {
     accountNumber,

@@ -106,7 +106,11 @@ export function isOtoChildAlreadyDead(status) {
   return ['rejected', 'cancelled', 'canceled', 'expired'].includes(s);
 }
 
-/** Tastytrade `cannot_update_order` / 404 — the order is not in a cancellable state. */
+/**
+ * Cancel failed because the child is already gone (404).
+ * `cannot_update_order` on a still-working contingent OTO child is a refusal,
+ * not proof the order is absent — callers must keep that child.
+ */
 export function isCancelFailureBecauseOrderDead(cancelErrorOrResult) {
   if (cancelErrorOrResult == null) return false;
   if (isBrokerOrderGoneError(cancelErrorOrResult)) return true;
@@ -119,8 +123,7 @@ export function isCancelFailureBecauseOrderDead(cancelErrorOrResult) {
     .filter((v) => v != null && v !== '')
     .join(' ');
   if (!msg) return false;
-  if (isBrokerOrderGoneError(msg)) return true;
-  return /cannot_update_order|cannot update order/i.test(msg);
+  return isBrokerOrderGoneError(msg);
 }
 
 export function expectedStopTriggerFromFill(fillPrice, stopPnlFrac) {
@@ -305,19 +308,24 @@ export async function alignOtoChildStopToFilledQty({
     }
   }
 
-  const cancelFailedBecauseDead = isCancelFailureBecauseOrderDead(cancelError);
+  const cancelProvesAbsent = isCancelFailureBecauseOrderDead(cancelError);
+  // A still-working contingent child cannot be cancelled or replaced in place.
+  // cannot_update_order is that refusal. Keep the child. Do not post a second sell.
+  // Unknown broker state is the same: preserve the id and reconcile.
   const mayPlaceReplacement =
-    cancelledChild || childAlreadyDead || cancelFailedBecauseDead || !stopOrderId;
+    cancelledChild || childAlreadyDead || cancelProvesAbsent || !stopOrderId;
 
   if (stopOrderId && !mayPlaceReplacement) {
+    const contingentRefusal = /cannot_update_order|cannot update order/i.test(String(cancelError || ''));
+    const reason = contingentRefusal ? 'contingent_child_retained' : (cancelError || 'cancel_unconfirmed');
     console.error(
-      `[OtoStop] ALIGN FAILED filled=${filled} observed=${observedStopQty ?? 'n/a'} ` +
-        `reason=cancel_unconfirmed — not submitting a second stop`
+      `[OtoStop] retaining child ${stopOrderId} filled=${filled} observed=${observedStopQty ?? 'n/a'} ` +
+        `reason=${reason} — not submitting a second stop`
     );
     return {
       aligned: false,
       replaced: false,
-      reason: cancelError || 'cancel_unconfirmed',
+      reason,
       stopProtectionState: 'CANCEL_REQUESTED_UNCONFIRMED',
       stopOrderId,
       previousStopOrderId: stopOrderId,

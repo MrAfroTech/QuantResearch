@@ -14,6 +14,8 @@ import {
   ORB_ENTRIES_ENABLED,
   OUTSIDE_ENTRY_WINDOW_REASON,
   DAILY_PROFIT_HALT_REASON,
+  ORB_SESSION_START,
+  ORB_TIME_STOP,
 } from './orbConfig.js';
 import { ORB_PREMARKET_ENTRY_SIZING, ladderPositionSize } from '../ladder/ladderSizing.js';
 import { EMA_VWAP_ENTRY_SIZING } from '../emaVwapCross/emaVwapConfig.js';
@@ -25,7 +27,7 @@ import {
   OUTSIDE_ENTRY_WINDOW_REASON as PM_OUTSIDE,
 } from '../premarketBreakout/premarketConfig.js';
 import { isWithinPremarketSession } from '../premarketBreakout/premarketRangeState.js';
-import { minutesSinceMidnightEt } from './tradierTimesales.js';
+import { isAtOrAfterTimeStop, isWithinOrbSession, minutesSinceMidnightEt } from './tradierTimesales.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -37,24 +39,54 @@ function withinOrbEntryWindow(date) {
 }
 
 describe('ORB production entry/sizing constants', () => {
-  it('entry window is 9:30–11:00 ET exclusive end', () => {
+  it('entry window is 9:30 AM–3:05 PM ET exclusive end', () => {
     assert.deepEqual(ORB_ENTRY_WINDOW_START, { hour: 9, minute: 30 });
-    assert.deepEqual(ORB_ENTRY_WINDOW_END, { hour: 11, minute: 0 });
+    assert.deepEqual(ORB_ENTRY_WINDOW_END, { hour: 15, minute: 5 });
+    assert.deepEqual(ORB_SESSION_START, { hour: 9, minute: 30 });
+    assert.deepEqual(ORB_TIME_STOP, { hour: 15, minute: 5 });
     assert.equal(OUTSIDE_ENTRY_WINDOW_REASON, 'outside_entry_window');
     assert.equal(DAILY_PROFIT_HALT_REASON, 'daily_profit_halt');
   });
 
-  it('ORB minutes helper matches 9:30 inclusive / 11:00 exclusive', () => {
-    // Construct UTC instants that map to known ET wall times on a fixed weekday.
+  it('ORB session is 9:30:00 inclusive through 15:04:59 ET, cutoff at 15:05:00', () => {
     // 2026-03-16 is a Monday; America/New_York is EDT (UTC-4).
-    const at930 = new Date('2026-03-16T13:30:00.000Z'); // 9:30 ET
-    const at1059 = new Date('2026-03-16T14:59:00.000Z'); // 10:59 ET
-    const at1100 = new Date('2026-03-16T15:00:00.000Z'); // 11:00 ET
-    const at929 = new Date('2026-03-16T13:29:00.000Z'); // 9:29 ET
-    assert.equal(withinOrbEntryWindow(at930), true);
-    assert.equal(withinOrbEntryWindow(at1059), true);
-    assert.equal(withinOrbEntryWindow(at1100), false);
-    assert.equal(withinOrbEntryWindow(at929), false);
+    const at92959 = new Date('2026-03-16T13:29:59.000Z');
+    const at93000 = new Date('2026-03-16T13:30:00.000Z');
+    const at150459 = new Date('2026-03-16T19:04:59.000Z');
+    const at150500 = new Date('2026-03-16T19:05:00.000Z');
+
+    assert.equal(isWithinOrbSession(at92959), false);
+    assert.equal(withinOrbEntryWindow(at92959), false);
+    assert.equal(isWithinOrbSession(at93000), true);
+    assert.equal(withinOrbEntryWindow(at93000), true);
+    assert.equal(isWithinOrbSession(at150459), true);
+    assert.equal(withinOrbEntryWindow(at150459), true);
+    assert.equal(isWithinOrbSession(at150500), false);
+    assert.equal(withinOrbEntryWindow(at150500), false);
+    assert.equal(isAtOrAfterTimeStop(at150459), false);
+    assert.equal(isAtOrAfterTimeStop(at150500), true);
+  });
+
+  it('uses America/New_York across EST and EDT', () => {
+    // 2026-01-15 Thursday, EST (UTC-5): 9:30 ET = 14:30Z, 15:05 ET = 20:05Z.
+    const winterBefore = new Date('2026-01-15T14:29:59.000Z');
+    const winterOpen = new Date('2026-01-15T14:30:00.000Z');
+    const winterInside = new Date('2026-01-15T20:04:59.000Z');
+    const winterCutoff = new Date('2026-01-15T20:05:00.000Z');
+    assert.equal(isWithinOrbSession(winterBefore), false);
+    assert.equal(isWithinOrbSession(winterOpen), true);
+    assert.equal(isWithinOrbSession(winterInside), true);
+    assert.equal(isWithinOrbSession(winterCutoff), false);
+
+    // 2026-07-16 Thursday, EDT (UTC-4): 9:30 ET = 13:30Z, 15:05 ET = 19:05Z.
+    const summerBefore = new Date('2026-07-16T13:29:59.000Z');
+    const summerOpen = new Date('2026-07-16T13:30:00.000Z');
+    const summerInside = new Date('2026-07-16T19:04:59.000Z');
+    const summerCutoff = new Date('2026-07-16T19:05:00.000Z');
+    assert.equal(withinOrbEntryWindow(summerBefore), false);
+    assert.equal(withinOrbEntryWindow(summerOpen), true);
+    assert.equal(withinOrbEntryWindow(summerInside), true);
+    assert.equal(withinOrbEntryWindow(summerCutoff), false);
   });
 
   it('min premium floor is $0.85 and live cap is 80%', () => {

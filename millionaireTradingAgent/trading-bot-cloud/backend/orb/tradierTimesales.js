@@ -1,3 +1,5 @@
+import { ORB_SESSION_START, ORB_TIME_STOP } from './orbConfig.js';
+
 // Kept for reference; market-data always uses production (realtime).
 const SANDBOX_URL = 'https://sandbox.tradier.com/v1';
 const PRODUCTION_URL = 'https://api.tradier.com/v1';
@@ -54,8 +56,8 @@ export function isWeekdayEt(date = new Date()) {
 export function isWithinOrbSession(date = new Date()) {
   if (!isWeekdayEt(date)) return false;
   const mins = minutesSinceMidnightEt(date);
-  const start = 9 * 60 + 30;
-  const end = 15 * 60 + 5;
+  const start = ORB_SESSION_START.hour * 60 + ORB_SESSION_START.minute;
+  const end = ORB_TIME_STOP.hour * 60 + ORB_TIME_STOP.minute;
   return mins >= start && mins < end;
 }
 
@@ -66,7 +68,7 @@ export function isAfterRangeEnd(date = new Date()) {
 
 export function isAtOrAfterTimeStop(date = new Date()) {
   const mins = minutesSinceMidnightEt(date);
-  return mins >= 15 * 60 + 5;
+  return mins >= ORB_TIME_STOP.hour * 60 + ORB_TIME_STOP.minute;
 }
 
 function formatTimesalesStartEnd(tradeDate) {

@@ -60,11 +60,12 @@ export const ORB_RANGE_END = { hour: 9, minute: 45 };
 export const ORB_TIME_STOP = { hour: 15, minute: 5 };
 
 /**
- * New ORB entries only between these times (ET). Exits/open positions unaffected.
- * Inclusive start, exclusive end → 9:30–10:59:59 ET.
+ * New ORB entries only between these times (ET). Signal rules are unchanged.
+ * Inclusive start, exclusive end → 9:30:00 through 15:04:59 America/New_York.
+ * 15:05 is the existing time-stop: no new entry, open positions flatten.
  */
 export const ORB_ENTRY_WINDOW_START = { hour: 9, minute: 30 };
-export const ORB_ENTRY_WINDOW_END = { hour: 11, minute: 0 };
+export const ORB_ENTRY_WINDOW_END = { hour: 15, minute: 5 };
 
 export const OUTSIDE_ENTRY_WINDOW_REASON = 'outside_entry_window';
 export const DAILY_PROFIT_HALT_REASON = 'daily_profit_halt';

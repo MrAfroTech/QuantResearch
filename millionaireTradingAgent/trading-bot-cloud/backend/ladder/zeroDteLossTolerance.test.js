@@ -134,7 +134,7 @@ describe('entry rules and broker-stop reconciliation stay in place', () => {
     assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.85);
     assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.85);
     assert.deepEqual(ORB_ENTRY_WINDOW_START, { hour: 9, minute: 30 });
-    assert.deepEqual(ORB_ENTRY_WINDOW_END, { hour: 11, minute: 0 });
+    assert.deepEqual(ORB_ENTRY_WINDOW_END, { hour: 15, minute: 5 });
   });
 
   it('books a filled protective stop once and does not submit another sell', async () => {
