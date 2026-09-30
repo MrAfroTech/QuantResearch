@@ -220,14 +220,14 @@ describe('MFE advance from the selected price', () => {
 });
 
 describe('approved stop distances stay in place', () => {
-  it('keeps the 15% initial stop and 18.5% hard stop', () => {
-    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.15);
-    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.185);
-    assert.equal(ORB_STOP_LOSS_PCT, 0.15);
-    assert.equal(ORB_HARD_STOP_PCT, 0.185);
-    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.15);
-    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.185);
-    assert.equal(computeStopTriggerPrice(0.99, -0.15), 0.84);
-    assert.equal(computeStopTriggerPrice(0.99, -0.185), 0.81);
+  it('keeps the 8% initial stop and 13.5% hard stop', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.08);
+    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.135);
+    assert.equal(ORB_STOP_LOSS_PCT, 0.08);
+    assert.equal(ORB_HARD_STOP_PCT, 0.135);
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.08);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.135);
+    assert.equal(computeStopTriggerPrice(0.99, -0.08), 0.91);
+    assert.equal(computeStopTriggerPrice(0.99, -0.135), 0.86);
   });
 });

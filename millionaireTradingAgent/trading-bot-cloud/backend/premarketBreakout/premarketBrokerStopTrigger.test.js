@@ -8,15 +8,15 @@ import {
 } from './premarketConfig.js';
 
 describe('Premarket resting broker stop tracks soft + hard levels', () => {
-  it('hard trigger is 18.5% and distinct from soft 15%', () => {
-    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.185);
-    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.15);
+  it('hard trigger is 13.5% and distinct from soft 8%', () => {
+    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.135);
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.08);
     const iv = computePremarketIvStopPcts(0.1583);
     assert.equal(iv.hardStopPct, PREMARKET_HARD_STOP_TRIGGER);
     assert.equal(iv.softStopPct, PREMARKET_STOP_LOSS_PCT);
   });
 
-  it('placeInitialStop params at soft = 15% off entry (same path as executor)', () => {
+  it('placeInitialStop params at soft = 8% off entry (same path as executor)', () => {
     const entry = 0.925;
     // Executor/monitor pass soft PREMARKET_STOP_LOSS_PCT for the resting broker stop.
     const params = buildBrokerStopOrderParams(
@@ -36,15 +36,15 @@ describe('Premarket resting broker stop tracks soft + hard levels', () => {
       Math.round(entry * (1 - PREMARKET_STOP_LOSS_PCT) * 100) / 100
     );
     assert.equal(params.stopTrigger, expectedTrigger);
-    // 0.925 * 0.85 = 0.78625 → 0.79
-    assert.equal(params.stopTrigger, 0.79);
+    // 0.925 * 0.92 = 0.851 → 0.85
+    assert.equal(params.stopTrigger, 0.85);
     assert.notEqual(
       params.stopTrigger,
       Math.max(0.01, Math.round(entry * (1 - PREMARKET_HARD_STOP_TRIGGER) * 100) / 100)
     );
   });
 
-  it('hard 18.5% poll price is tighter than soft 15% resting price', () => {
+  it('hard 13.5% poll price is below the soft 8% resting price', () => {
     const entry = 0.925;
     const hard = buildBrokerStopOrderParams(
       { entry_premium: entry, quantity: 1, contracts_open: 1, exit_phase: 'LADDER:0' },
@@ -54,9 +54,9 @@ describe('Premarket resting broker stop tracks soft + hard levels', () => {
       { entry_premium: entry, quantity: 1, contracts_open: 1, exit_phase: 'LADDER:0' },
       { initialStopPct: PREMARKET_STOP_LOSS_PCT }
     );
-    // 0.925 * 0.815 = 0.753875 → 0.75 ; soft → 0.79
-    assert.equal(hard.stopTrigger, 0.75);
-    assert.equal(soft.stopTrigger, 0.79);
+    // 0.925 * 0.865 = 0.800125 → 0.80 ; soft → 0.85
+    assert.equal(hard.stopTrigger, 0.80);
+    assert.equal(soft.stopTrigger, 0.85);
     assert.ok(hard.stopTrigger < soft.stopTrigger);
   });
 
@@ -71,7 +71,7 @@ describe('Premarket resting broker stop tracks soft + hard levels', () => {
       },
       { initialStopPct: PREMARKET_STOP_LOSS_PCT }
     );
-    assert.equal(params.stopPnlFrac, -0.15);
-    assert.equal(params.stopTrigger, 0.85); // 1.0 * 0.85 → 0.85
+    assert.equal(params.stopPnlFrac, -0.08);
+    assert.equal(params.stopTrigger, 0.92); // 1.0 * 0.92 → 0.92
   });
 });

@@ -37,13 +37,13 @@ export const CHOP_FILTER_REJECTED_REASON = 'chop_filter_rejected';
  */
 export const EMA_VWAP_PROFIT_PCT = 0.175;
 /**
- * Primary soft stop (poll + resting broker stop). Flat 15% of premium.
- * Hard backstop is EMA_VWAP_HARD_STOP_PCT (18.5%).
+ * Primary soft stop (poll + resting broker stop). Flat 8% of premium.
+ * Hard backstop is EMA_VWAP_HARD_STOP_PCT (13.5%).
  */
-export const EMA_VWAP_STOP_LOSS_PCT = 0.15;
+export const EMA_VWAP_STOP_LOSS_PCT = 0.08;
 
 /** Poll / fill-attribution hard ceiling. Independent of shared LADDER_HARD_STOP_PCT. */
-export const EMA_VWAP_HARD_STOP_PCT = 0.185;
+export const EMA_VWAP_HARD_STOP_PCT = 0.135;
 
 /**
  * EMA/VWAP-only hard entry-size cap. Overrides max-affordable under the 70% live

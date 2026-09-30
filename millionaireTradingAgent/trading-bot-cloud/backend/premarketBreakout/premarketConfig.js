@@ -46,9 +46,9 @@ export const PREMARKET_ENTRY_SIZING = Object.freeze({
 export const PREMARKET_PROFIT_PCT = 0.175;
 /**
  * Primary soft stop (fraction of premium) — poll stop_loss + resting broker stop_market.
- * Flat 15% — not IV-scaled. Hard backstop is PREMARKET_HARD_STOP_TRIGGER.
+ * Flat 8% — not IV-scaled. Hard backstop is PREMARKET_HARD_STOP_TRIGGER.
  */
-export const PREMARKET_STOP_LOSS_PCT = 0.15;
+export const PREMARKET_STOP_LOSS_PCT = 0.08;
 
 /**
  * Premarket-only pre-milestone partial-lock trail.
@@ -65,10 +65,10 @@ export const PREMARKET_PARTIAL_LOCK_CLOSE_REASON = 'partial_lock_trail';
 
 /**
  * Premarket hard backstop (fraction of premium) — poll hard_stop + fill-attribution ceiling.
- * Flat 18.5% — not IV-scaled. Soft is primary on the resting broker order.
- * Same 15% / 18.5% pair as ORB and EMA/VWAP.
+ * Flat 13.5% — not IV-scaled. Soft is primary on the resting broker order.
+ * Same 8% / 13.5% pair as ORB and EMA/VWAP.
  */
-export const PREMARKET_HARD_STOP_TRIGGER = 0.185;
+export const PREMARKET_HARD_STOP_TRIGGER = 0.135;
 
 /**
  * Legacy / display name for Premarket's hard-stop level. Exit path uses
@@ -107,8 +107,8 @@ export const PREMARKET_IV_STOP_MULT_CAP = 2;
 
 /**
  * Premarket stop levels for poll + broker.
- * Soft is ALWAYS the flat PREMARKET_STOP_LOSS_PCT (15%) — IV scaling removed.
- * Hard is ALWAYS PREMARKET_HARD_STOP_TRIGGER (18.5%).
+ * Soft is ALWAYS the flat PREMARKET_STOP_LOSS_PCT (8%) — IV scaling removed.
+ * Hard is ALWAYS PREMARKET_HARD_STOP_TRIGGER (13.5%).
  * softStopBase override still honored when Tier-1 runtime params pass an explicit base
  * (still not IV-multiplied).
  */

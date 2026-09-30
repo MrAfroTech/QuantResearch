@@ -17,9 +17,9 @@ import { OPTION_OPENING_COMMISSION_PER_CONTRACT } from '../ladder/ladderConfig.j
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe('EMA/VWAP go-live prerequisites', () => {
-  it('uses 15% soft / 18.5% hard stops', () => {
-    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.15);
-    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.185);
+  it('uses 8% soft / 13.5% hard stops', () => {
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.08);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.135);
   });
 
   it('hard-caps EMA/VWAP at 1 contract even when max-affordable would allow more', () => {

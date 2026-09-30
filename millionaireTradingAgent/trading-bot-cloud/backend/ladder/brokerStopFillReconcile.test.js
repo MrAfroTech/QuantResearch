@@ -74,8 +74,8 @@ describe('filled broker stop closes the DB position without a quote or another s
     const entry = position.entry_premium;
     const fillPrice = 0.86;
     const pnlFrac = (fillPrice - entry) / entry;
-    assert.equal(ORB_STOP_LOSS_PCT, 0.15);
-    assert.equal(ORB_HARD_STOP_PCT, 0.185);
+    assert.equal(ORB_STOP_LOSS_PCT, 0.08);
+    assert.equal(ORB_HARD_STOP_PCT, 0.135);
     assert.ok(pnlFrac <= -ORB_HARD_STOP_PCT);
     const brokerStop = brokerStopForFill(
       {
