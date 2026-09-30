@@ -540,8 +540,10 @@ async function tastytradeSubmitOtoEntryStopWithCredentials(
   if (!parsed.triggerOrderId) {
     throw new Error('Tastytrade OTO submitted but no trigger order ID returned');
   }
+  // A missing stop child is not a failed entry. The trigger id is the accepted
+  // BTO. Callers recover that order and must not submit another Buy to Open.
   if (!parsed.stopOrderId) {
-    throw new Error('Tastytrade OTO submitted but no stop child order ID returned');
+    return { ...parsed, stopOrderId: null, stopChildMissing: true, body };
   }
   return { ...parsed, body };
 }
@@ -1794,6 +1796,7 @@ export async function placeOptionOrder({
     Number(initialStop?.stopTrigger) > 0 &&
     Number(quantity) >= 1;
 
+  let acceptedTriggerId = null;
   if (wantOto) {
     try {
       const oto = await tastytradeSubmitOtoEntryStopWithCredentials(credentials, sessionRef, {
@@ -1805,6 +1808,7 @@ export async function placeOptionOrder({
         stopLimitPrice: initialStop.limitPrice ?? null,
         stopOrderType: initialStop.orderType ?? null,
       });
+      acceptedTriggerId = oto.triggerOrderId || null;
 
       let fillStatus = null;
       try {
@@ -1864,11 +1868,13 @@ export async function placeOptionOrder({
               }
               return { ...placed, resting: true, stopTrigger: status.stopTrigger ?? fillStop.stopTrigger };
             } catch (err) {
+              // POST already returned an id. A failed confirmation GET is
+              // UNKNOWN, not "no order". Keep the id and do not POST again.
               return {
                 ...placed,
-                orderId: null,
                 resting: false,
                 reason: 'stop_status_unconfirmed',
+                stopProtectionState: 'UNKNOWN',
               };
             }
           },
@@ -1906,6 +1912,11 @@ export async function placeOptionOrder({
       const bookedQty = finalized.bookedQuantity;
       const fillStop = fillBasedStopParams(initialStop, fillStatus?.fillPrice);
       const stopAligned = Boolean(finalized.aligned?.aligned);
+      const alignState = finalized.aligned?.stopProtectionState || null;
+      const keepUnresolvedStop =
+        alignState === 'CANCEL_REQUESTED_UNCONFIRMED' ||
+        alignState === 'PLACED_UNCONFIRMED' ||
+        alignState === 'UNKNOWN';
       const stopOrderId = restingStopIdAfterAlign({
         aligned: finalized.aligned,
         otoStopOrderId: oto.stopOrderId,
@@ -1913,9 +1924,10 @@ export async function placeOptionOrder({
       const stopAlignFailed =
         bookedQty >= 1 &&
         Math.floor(Number(fillStatus?.fillQuantity) || 0) >= 1 &&
-        !stopAligned;
+        !stopAligned &&
+        !keepUnresolvedStop;
 
-      if (stopAlignFailed) {
+      if (stopAlignFailed && finalized.aligned?.reason !== 'child_already_filled') {
         console.error(
           `[${orderEnvironment === 'paper' ? 'SANDBOX' : 'LIVE'}][${strategy}] ` +
             `OTO STOP ALIGN FAILED entry=${oto.triggerOrderId} ` +
@@ -1977,8 +1989,61 @@ export async function placeOptionOrder({
         brokerStopMatchedFill: Boolean(finalized.brokerDidMatch),
         stopAlignFailed,
         stopAlignReason: finalized.aligned?.reason || null,
+        stopProtectionState: alignState,
+        stopFillPrice: finalized.aligned?.fillPrice ?? null,
+        stopFillQuantity: finalized.aligned?.fillQuantity ?? null,
       };
     } catch (err) {
+      if (acceptedTriggerId) {
+        console.error(
+          `[BrokerageConnector] OTO bracket failed after trigger ${acceptedTriggerId} ` +
+            `was accepted for ${strategy}: ${otoFallbackReason(err)} ` +
+            `— not submitting another Buy to Open`
+        );
+        try {
+          const recovered = await tastytradeGetOrderStatusWithCredentials(
+            credentials,
+            sessionRef,
+            accountNumber,
+            acceptedTriggerId
+          );
+          const confirmedFill = hasConfirmedFillPrice(recovered) ? recovered.fillPrice : null;
+          const bookedQty = bookedEntryQuantity({
+            requestedQuantity: quantity,
+            fillQuantity: recovered?.fillQuantity,
+          });
+          return {
+            orderId: acceptedTriggerId,
+            stopOrderId: null,
+            bracketType: 'OTO',
+            stopTrigger: Number(initialStop?.stopTrigger) || null,
+            stopPnlFrac: initialStop?.stopPnlFrac ?? null,
+            paper: orderEnvironment === 'paper',
+            environment: orderEnvironment,
+            sandbox: Boolean(credentials.sandbox),
+            broker: 'tastytrade',
+            ...order,
+            status: recovered?.status || 'submitted',
+            fillPrice: confirmedFill,
+            filled: Boolean(recovered?.isFilled),
+            partialFill: Boolean(recovered?.isPartialFill),
+            premium: confirmedFill ?? limitPrice,
+            quantity: bookedQty,
+            requestedQuantity: quantity,
+            fillQuantity: Math.floor(Number(recovered?.fillQuantity) || 0),
+            remainingQuantity: recovered?.remainingQuantity ?? null,
+            stopAlignFailed: bookedQty >= 1,
+            stopAlignReason: otoFallbackReason(err),
+            stopProtectionState: 'NONE',
+          };
+        } catch (recoverErr) {
+          console.error(
+            `[BrokerageConnector] OTO trigger ${acceptedTriggerId} recovery GET failed:`,
+            recoverErr.message
+          );
+          throw err;
+        }
+      }
       console.error(
         `[BrokerageConnector] OTO bracket failed for ${strategy}: ${otoFallbackReason(err)} ` +
           `— falling back to entry-only + stop retry`

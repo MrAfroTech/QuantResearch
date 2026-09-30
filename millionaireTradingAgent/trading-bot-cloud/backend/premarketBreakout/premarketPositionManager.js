@@ -372,6 +372,7 @@ async function tryPremarketPartialLockTrailClose(position, {
 
   const settled = await submitAndSettleFullClose({
     position,
+    strategy: 'premarket',
     closeQty,
     currentPremium: orderPremium,
     pnlFrac,
@@ -565,6 +566,7 @@ export async function monitorPremarketPositions() {
       // Partial-lock software *close* must NOT run before this — otherwise a
       // deep-red poll is claimed as partial_lock_trail (trades 48/49 diagnostic).
       const action = await handleLadderPositionMonitor(position, {
+        strategy: 'premarket',
         currentPremium,
         initialStopPct: ivStops.softStopPct,
         // Premarket-only constant — not shared LADDER_HARD_STOP_PCT.

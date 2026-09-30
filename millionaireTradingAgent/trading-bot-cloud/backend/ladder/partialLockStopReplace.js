@@ -9,6 +9,7 @@
 
 import { nextStopRetryBackoffMs } from './initialStopRetry.js';
 import { POSITION_UNPROTECTED_NO_RESTING_STOP } from './ladderStopOrders.js';
+import { isExitRequested } from './stopBook.js';
 
 /** Event type written on every unsuccessful replace attempt. */
 export const PARTIAL_LOCK_STOP_REPLACE_FAILED = 'partial_lock_stop_replace_failed';
@@ -103,6 +104,10 @@ export async function attemptPartialLockStopReplace(position, {
   onFailure = null,
   logLabel = 'PartialLock',
 } = {}) {
+  if (isExitRequested(strategy, position?.id)) {
+    return { placed: false, reason: 'exit_requested', attempt };
+  }
+
   if (typeof replaceStop !== 'function') {
     const result = { placed: false, reason: 'replace_stop_unavailable' };
     if (onFailure) {
@@ -316,7 +321,11 @@ export function ensurePartialLockBrokerStopRaised(
       }
 
       lastReason = result?.reason || 'unknown';
-      if (lastReason === 'raise_not_needed') {
+      if (
+        lastReason === 'raise_not_needed' ||
+        lastReason === 'exit_requested' ||
+        lastReason === 'exit_requested_during_replace'
+      ) {
         return { placed: false, reason: lastReason, attempt };
       }
 
@@ -392,6 +401,8 @@ export async function syncPartialLockBrokerStopWithRetry(position, {
   if (
     inline?.reason === 'broker_already_flat' ||
     inline?.reason === 'position_closed' ||
+    inline?.reason === 'exit_requested' ||
+    inline?.reason === 'exit_requested_during_replace' ||
     inline?.brokerFlat
   ) {
     return inline;

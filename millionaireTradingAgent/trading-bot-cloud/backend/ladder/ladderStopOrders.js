@@ -7,9 +7,24 @@ import {
 import {
   brokerStopFillIsConfirmed,
   hasConfirmedFillPrice,
+  isBrokerOrderGoneError,
   isCancelConfirmed,
 } from './orderFillStatus.js';
 import { ensureInitialBrokerStopUntilProtected } from './initialStopRetry.js';
+import {
+  STOP_STATE,
+  beginInitialStop,
+  beginStopCancel,
+  beginStopReplace,
+  endInitialStop,
+  endStopCancel,
+  finishStopReplace,
+  forgetUnconfirmedStop,
+  isExitRequested,
+  lookupUnconfirmedStop,
+  releaseStopBookIfIdle,
+  rememberUnconfirmedStop,
+} from './stopBook.js';
 import {
   LADDER_CLOSE_REASON,
   computeActiveStopPnlFrac,
@@ -140,6 +155,43 @@ export async function placeLadderBrokerStop(position, {
     return { placed: false, reason: 'invalid_params' };
   }
 
+  if (isExitRequested(strategy, position.id)) {
+    return { placed: false, reason: 'exit_requested' };
+  }
+
+  const pending = lookupUnconfirmedStop(strategy, position);
+  if (pending?.state === STOP_STATE.ABSENT) {
+    forgetUnconfirmedStop(strategy, position, pending.orderId);
+  } else if (
+    pending?.orderId &&
+    (pending.state === STOP_STATE.PLACED_UNCONFIRMED ||
+      pending.state === STOP_STATE.UNKNOWN ||
+      pending.state === STOP_STATE.CANCEL_REQUESTED_UNCONFIRMED ||
+      pending.state === STOP_STATE.FILLED)
+  ) {
+    if (updateBrokerStopState) {
+      await updateBrokerStopState(position.id, {
+        broker_stop_order_id: pending.orderId,
+        broker_stop_trigger_price: params.stopTrigger,
+        broker_stop_pnl_frac: params.stopPnlFrac,
+      });
+    }
+    position.broker_stop_order_id = pending.orderId;
+    console.error(
+      `[LadderStop][${strategy}] Stop already accepted but unconfirmed #${position.id} ` +
+        `order=${pending.orderId} — reconciling, not posting another stop`
+    );
+    return {
+      placed: false,
+      unresolved: true,
+      reason: 'stop_status_unconfirmed',
+      stopProtectionState: pending.state,
+      orderId: pending.orderId,
+      stopTrigger: params.stopTrigger,
+      stopPnlFrac: params.stopPnlFrac,
+    };
+  }
+
   try {
     const result = await submitOptionStopOrder(position, {
       quantity: params.quantity,
@@ -151,6 +203,37 @@ export async function placeLadderBrokerStop(position, {
     });
 
     if (!result?.resting && !result?.dryRun && !result?.simulated) {
+      const unconfirmed =
+        Boolean(result?.orderId) &&
+        (result.reason === 'stop_status_unconfirmed' ||
+          result.stopProtectionState === STOP_STATE.UNKNOWN ||
+          result.stopProtectionState === STOP_STATE.PLACED_UNCONFIRMED);
+      if (unconfirmed) {
+        rememberUnconfirmedStop(strategy, position, result.orderId, STOP_STATE.PLACED_UNCONFIRMED);
+        if (updateBrokerStopState) {
+          await updateBrokerStopState(position.id, {
+            broker_stop_order_id: result.orderId,
+            broker_stop_trigger_price: params.stopTrigger,
+            broker_stop_pnl_frac: params.stopPnlFrac,
+          });
+        }
+        position.broker_stop_order_id = result.orderId;
+        console.error(
+          `[LadderStop][${strategy}] Stop accepted but unconfirmed #${position.id} ` +
+            `order=${result.orderId} reason=${result.reason || 'stop_status_unconfirmed'} ` +
+            `— keeping id, not posting another stop`
+        );
+        return {
+          placed: false,
+          unresolved: true,
+          reason: 'stop_status_unconfirmed',
+          stopProtectionState: STOP_STATE.PLACED_UNCONFIRMED,
+          orderId: result.orderId,
+          status: result.status ?? null,
+          stopTrigger: params.stopTrigger,
+          stopPnlFrac: params.stopPnlFrac,
+        };
+      }
       console.error(
         `[LadderStop][${strategy}] Stop submit not resting #${position.id} ` +
           `order=${result?.orderId || 'none'} reason=${result?.reason || 'not_resting'}`
@@ -170,6 +253,7 @@ export async function placeLadderBrokerStop(position, {
         ? Math.floor(Number(result.quantity))
         : params.quantity;
 
+    forgetUnconfirmedStop(strategy, position, result.orderId);
     if (updateBrokerStopState) {
       await updateBrokerStopState(position.id, {
         broker_stop_order_id: result.orderId,
@@ -199,10 +283,19 @@ export async function placeLadderBrokerStop(position, {
 export async function cancelLadderBrokerStop(position, { strategy, environment, updateBrokerStopState }) {
   const orderId = position.broker_stop_order_id;
   if (!orderId) return { cancelled: false, reason: 'no_stop_order' };
+  if (!beginStopCancel(strategy, position.id)) {
+    return { cancelled: false, reason: 'stop_mutation_in_flight', orderId };
+  }
 
   try {
     const result = await cancelBrokerOrder(orderId, { environment, strategy });
     if (!isCancelConfirmed(result)) {
+      rememberUnconfirmedStop(
+        strategy,
+        position,
+        orderId,
+        STOP_STATE.CANCEL_REQUESTED_UNCONFIRMED
+      );
       console.error(
         `[LadderStop][${strategy}] Cancel not confirmed for #${position.id} order=${orderId} ` +
           `reason=${result?.reason || 'n/a'} — leaving broker_stop_order_id in place`
@@ -214,6 +307,7 @@ export async function cancelLadderBrokerStop(position, { strategy, environment, 
         status: result?.status ?? null,
       };
     }
+    forgetUnconfirmedStop(strategy, position, orderId);
     if (updateBrokerStopState) {
       await updateBrokerStopState(position.id, {
         broker_stop_order_id: null,
@@ -224,8 +318,11 @@ export async function cancelLadderBrokerStop(position, { strategy, environment, 
     console.log(`[LadderStop][${strategy}] Cancelled stop order ${orderId} for #${position.id}`);
     return { cancelled: true, orderId };
   } catch (err) {
+    rememberUnconfirmedStop(strategy, position, orderId, STOP_STATE.UNKNOWN);
     console.error(`[LadderStop][${strategy}] Cancel failed for #${position.id}:`, err.message);
     return { cancelled: false, reason: err.message, error: err };
+  } finally {
+    endStopCancel(strategy, position.id);
   }
 }
 
@@ -277,9 +374,20 @@ export async function replaceLadderBrokerStop(position, {
   // A working protective stop stays until Tastytrade accepts the PUT replace.
   // Two resting STCs cannot coexist, so a failed replace must not cancel first
   // and must not POST a second sell. The ratchet retries this same PUT.
+  if (isExitRequested(strategy, position.id)) {
+    if (prior.broker_stop_order_id) {
+      return keptPriorProtectiveStop(position, prior, 'exit_requested');
+    }
+    return { placed: false, reason: 'exit_requested' };
+  }
+
   if (prior.broker_stop_order_id) {
+    if (!beginStopReplace(strategy, position.id)) {
+      return keptPriorProtectiveStop(position, prior, 'stop_mutation_in_flight');
+    }
+    let replaced;
     try {
-      const replaced = await replaceStopOrder(position, {
+      replaced = await replaceStopOrder(position, {
         existingOrderId: prior.broker_stop_order_id,
         quantity: params.quantity,
         stopTrigger: params.stopTrigger,
@@ -288,6 +396,24 @@ export async function replaceLadderBrokerStop(position, {
         environment,
         strategy,
       });
+    } catch (err) {
+      finishStopReplace(strategy, position.id);
+      console.error(
+        `[LadderStop][${strategy}] replace failed #${position.id}: ${err.message} ` +
+          `— keeping prior protective stop ${prior.broker_stop_order_id} ` +
+          `trigger=$${prior.broker_stop_trigger_price ?? 'n/a'}`
+      );
+      return keptPriorProtectiveStop(position, prior, err.message, err);
+    }
+    const gate = finishStopReplace(strategy, position.id);
+    if (gate.exitRequested) {
+      console.error(
+        `[LadderStop][${strategy}] replace finished during exit #${position.id} ` +
+          `— not adopting ${replaced?.orderId || 'n/a'}; keeping ${prior.broker_stop_order_id}`
+      );
+      return keptPriorProtectiveStop(position, prior, 'exit_requested_during_replace');
+    }
+    try {
       if (replaced?.resting || replaced?.dryRun || replaced?.simulated) {
         const placed = {
           placed: true,
@@ -297,6 +423,7 @@ export async function replaceLadderBrokerStop(position, {
           stopTrigger: replaced.stopTrigger ?? params.stopTrigger,
           stopPnlFrac: params.stopPnlFrac,
         };
+        forgetUnconfirmedStop(strategy, position, prior.broker_stop_order_id);
         applyPlacedStopToPosition(position, placed);
         if (updateBrokerStopState) {
           await updateBrokerStopState(position.id, {
@@ -310,6 +437,41 @@ export async function replaceLadderBrokerStop(position, {
             `${prior.broker_stop_order_id} → ${placed.orderId} trigger=$${placed.stopTrigger}`
         );
         return placed;
+      }
+      const unconfirmedReplacement =
+        Boolean(replaced?.orderId) &&
+        (replaced.reason === 'stop_status_unconfirmed' ||
+          replaced.stopProtectionState === STOP_STATE.UNKNOWN ||
+          replaced.stopProtectionState === STOP_STATE.PLACED_UNCONFIRMED);
+      if (unconfirmedReplacement) {
+        forgetUnconfirmedStop(strategy, position, prior.broker_stop_order_id);
+        rememberUnconfirmedStop(strategy, position, replaced.orderId, STOP_STATE.PLACED_UNCONFIRMED);
+        position.broker_stop_order_id = replaced.orderId;
+        position.broker_stop_trigger_price = params.stopTrigger;
+        position.broker_stop_pnl_frac = params.stopPnlFrac;
+        if (updateBrokerStopState) {
+          await updateBrokerStopState(position.id, {
+            broker_stop_order_id: replaced.orderId,
+            broker_stop_trigger_price: params.stopTrigger,
+            broker_stop_pnl_frac: params.stopPnlFrac,
+          });
+        }
+        console.error(
+          `[LadderStop][${strategy}] PUT accepted but unconfirmed #${position.id} ` +
+            `${prior.broker_stop_order_id} → ${replaced.orderId} — keeping new id, not posting`
+        );
+        return {
+          placed: false,
+          unresolved: true,
+          replaced: true,
+          reason: 'stop_status_unconfirmed',
+          stopProtectionState: STOP_STATE.PLACED_UNCONFIRMED,
+          orderId: replaced.orderId,
+          stopTrigger: params.stopTrigger,
+          stopPnlFrac: params.stopPnlFrac,
+          keptPriorStop: false,
+          unprotected: false,
+        };
       }
       console.error(
         `[LadderStop][${strategy}] replace not confirmed #${position.id} ` +
@@ -332,6 +494,10 @@ export async function replaceLadderBrokerStop(position, {
     }
   }
 
+  if (!beginStopReplace(strategy, position.id)) {
+    return { placed: false, reason: 'stop_mutation_in_flight' };
+  }
+  let replaceGate = { exitRequested: false };
   const placed = await placeStop(position, {
     strategy,
     environment,
@@ -339,7 +505,43 @@ export async function replaceLadderBrokerStop(position, {
     stopPnlFrac,
     milestonesPct,
     updateBrokerStopState,
+  }).finally(() => {
+    replaceGate = finishStopReplace(strategy, position.id);
   });
+  if (replaceGate.exitRequested) {
+    const discoveredId =
+      placed?.orderId ||
+      (position.broker_stop_order_id &&
+      position.broker_stop_order_id !== prior.broker_stop_order_id
+        ? position.broker_stop_order_id
+        : null);
+    position.broker_stop_order_id = prior.broker_stop_order_id;
+    position.broker_stop_trigger_price = prior.broker_stop_trigger_price;
+    position.broker_stop_pnl_frac = prior.broker_stop_pnl_frac;
+    if (discoveredId && !prior.broker_stop_order_id) {
+      rememberUnconfirmedStop(
+        strategy,
+        position,
+        discoveredId,
+        STOP_STATE.PLACED_UNCONFIRMED
+      );
+    }
+    if (updateBrokerStopState) {
+      await updateBrokerStopState(position.id, {
+        broker_stop_order_id: prior.broker_stop_order_id,
+        broker_stop_trigger_price: prior.broker_stop_trigger_price,
+        broker_stop_pnl_frac: prior.broker_stop_pnl_frac,
+      });
+    }
+    return {
+      placed: false,
+      adopted: false,
+      reason: 'exit_requested_during_replace',
+      orderId: discoveredId,
+      keptPriorStop: false,
+      unprotected: !position.broker_stop_order_id,
+    };
+  }
 
   if (placed?.placed) {
     applyPlacedStopToPosition(position, placed);
@@ -376,9 +578,27 @@ export async function checkLadderBrokerStopFill(position, {
   hardStopPct = null,
 }) {
   const orderId = position.broker_stop_order_id;
-  if (!orderId) return { filled: false };
+  if (!orderId) return { filled: false, stopProtectionState: STOP_STATE.NONE };
 
-  const status = await getBrokerOrderStatus(orderId, { environment, strategy });
+  let status;
+  try {
+    status = await getBrokerOrderStatus(orderId, { environment, strategy });
+  } catch (err) {
+    if (isBrokerOrderGoneError(err)) {
+      return {
+        filled: false,
+        gone: true,
+        stopProtectionState: STOP_STATE.ABSENT,
+        status: { isTerminal: true, gone: true, isFilled: false, status: 'not_found' },
+      };
+    }
+    return {
+      filled: false,
+      unknown: true,
+      stopProtectionState: STOP_STATE.UNKNOWN,
+      reason: err.message,
+    };
+  }
   if (!brokerStopFillIsConfirmed(status)) {
     return { filled: false, awaitingFillDetails: Boolean(status?.isFilled), status };
   }
@@ -425,13 +645,34 @@ export function createLadderBrokerStopHandlers({
 
   return {
     enabled,
+    strategy,
     async placeInitialStop(position) {
-      return placeLadderBrokerStop(position, {
-        strategy,
-        environment,
-        initialStopPct,
-        milestonesPct,
-        updateBrokerStopState,
+      if (!beginInitialStop(strategy, position?.id)) {
+        return {
+          placed: false,
+          reason: isExitRequested(strategy, position?.id)
+            ? 'exit_requested'
+            : 'stop_mutation_in_flight',
+        };
+      }
+      try {
+        return await placeLadderBrokerStop(position, {
+          strategy,
+          environment,
+          initialStopPct,
+          milestonesPct,
+          updateBrokerStopState,
+        });
+      } finally {
+        endInitialStop(strategy, position?.id);
+      }
+    },
+    async noteReconciledStop(position) {
+      if (!updateBrokerStopState || !position?.broker_stop_order_id) return;
+      await updateBrokerStopState(position.id, {
+        broker_stop_order_id: position.broker_stop_order_id,
+        broker_stop_trigger_price: position.broker_stop_trigger_price ?? null,
+        broker_stop_pnl_frac: position.broker_stop_pnl_frac ?? null,
       });
     },
     ensureInitialStopUntilProtected(position, extras = {}) {
@@ -489,6 +730,7 @@ export function createLadderBrokerStopHandlers({
         });
       }
       await fullClosePosition(position.id, exitPremium, pnlPct, closeReason, closeQty);
+      releaseStopBookIfIdle(strategy, position.id);
       // Same object must not be booked again if this poll continues.
       position.broker_stop_order_id = null;
       position.broker_stop_trigger_price = null;

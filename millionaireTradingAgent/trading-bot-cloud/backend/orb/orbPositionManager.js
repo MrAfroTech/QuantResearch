@@ -376,6 +376,7 @@ async function tryOrbPartialLockTrailClose(position, {
 
   const settled = await submitAndSettleFullClose({
     position,
+    strategy: 'orb',
     closeQty,
     currentPremium: orderPremium,
     pnlFrac,
@@ -560,6 +561,7 @@ export async function monitorOrbPositions() {
       // Ladder: broker-stop fill check + hard stop + soft stop + milestones.
       // Partial-lock software *close* must NOT run before this.
       const action = await handleLadderPositionMonitor(position, {
+        strategy: 'orb',
         currentPremium,
         initialStopPct: ORB_STOP_LOSS_PCT,
         hardStopPct: ORB_HARD_STOP_PCT,

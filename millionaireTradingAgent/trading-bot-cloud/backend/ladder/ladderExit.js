@@ -20,7 +20,16 @@ import {
   syncFlattenUntilClosed,
 } from './flattenUntilClosed.js';
 import { ensurePartialLockBrokerStopRaised } from './partialLockStopReplace.js';
-import { closeFillIsConfirmed, hasConfirmedFillPrice, parseEntryMetadata, positionHasConfirmedBrokerLong } from './orderFillStatus.js';
+import { closeFillIsConfirmed, hasConfirmedFillPrice, isCancelConfirmed, parseEntryMetadata, positionHasConfirmedBrokerLong } from './orderFillStatus.js';
+import {
+  STOP_STATE,
+  forgetUnconfirmedStop,
+  isBrokerStopMutationInFlight,
+  lookupUnconfirmedStop,
+  releaseStopBookIfIdle,
+  rememberUnconfirmedStop,
+  requestStopExit,
+} from './stopBook.js';
 
 /**
  * Explosive-bar admits are tagged gate_removed_entry on insert metadata.
@@ -270,6 +279,7 @@ async function closeNow({
   onNotify,
   updatePendingClose,
   notifyMeta = null,
+  strategy = null,
 }) {
   await persistPending(updatePendingClose, position, {
     pending_close_order_id: null,
@@ -277,6 +287,7 @@ async function closeNow({
     pending_close_submitted_at: null,
   });
   await fullClosePosition(position.id, exitPremium, pnlFrac * 100, reason, closeQty);
+  releaseStopBookIfIdle(strategy, position.id);
   if (onNotify) {
     await onNotify(position, reason, pnlFrac, exitPremium, closeQty, notifyMeta);
   }
@@ -315,6 +326,27 @@ function buildHardStopNotifyMeta({
   };
 }
 
+function lossExitOwnsStop(intendedReason, isTimeStop) {
+  return Boolean(isTimeStop) || isRiskExitReason(intendedReason);
+}
+
+/**
+ * A broker stop POST, PUT, or cancel is already mutating this position.
+ * Return without waiting and without a competing Sell to Close.
+ * A loss exit also marks exitRequested so the in-flight mutation cannot
+ * adopt a new stop and a later ratchet cannot start.
+ */
+function deferCompetingStopClose(position, strategy, { ownExit }) {
+  if (!isBrokerStopMutationInFlight(strategy, position?.id)) return null;
+  if (ownExit) requestStopExit(strategy, position.id);
+  return {
+    position,
+    deferred: true,
+    reason: 'stop_mutation_in_flight',
+    closeReason: null,
+  };
+}
+
 /**
  * Submit an STC and only write the trade log after a broker fill.
  * Unfilled discretionary limits: cancel the limit, restore the stop, stay OPEN.
@@ -338,10 +370,24 @@ export async function submitAndSettleFullClose({
   getOpenPosition = null,
   sleep = null,
   hardStopPct = null,
+  strategy = null,
 }) {
+  const ownExit = lossExitOwnsStop(intendedReason, isTimeStop);
+  const blocked = deferCompetingStopClose(position, strategy, { ownExit });
+  if (blocked) return blocked;
+  if (ownExit) requestStopExit(strategy, position.id);
+
   const brokerStopActive = !!(brokerStop?.enabled && position.broker_stop_order_id);
   if (brokerStopActive) {
-    await brokerStop.cancelStop(position);
+    const cancelResult = await brokerStop.cancelStop(position);
+    if (!isCancelConfirmed(cancelResult)) {
+      return {
+        position,
+        deferred: true,
+        reason: cancelResult?.reason || 'cancel_unconfirmed',
+        closeReason: null,
+      };
+    }
     position.broker_stop_order_id = null;
   }
 
@@ -419,6 +465,7 @@ export async function submitAndSettleFullClose({
       fullClosePosition,
       onNotify,
       updatePendingClose,
+      strategy,
     });
   }
 
@@ -456,6 +503,7 @@ export async function submitAndSettleFullClose({
         fullClosePosition,
         onNotify,
         updatePendingClose,
+        strategy,
         notifyMeta: isHardStop
           ? buildHardStopNotifyMeta({
               escalated: false,
@@ -532,6 +580,7 @@ export async function submitAndSettleFullClose({
         fullClosePosition,
         onNotify,
         updatePendingClose,
+        strategy,
         notifyMeta: isHardStop
           ? buildHardStopNotifyMeta({
               escalated: true,
@@ -647,6 +696,7 @@ async function settlePendingCloseOrder({
   updatePendingClose,
   getOpenPosition = null,
   hardStopPct = null,
+  strategy = null,
 }) {
   const orderId = position.pending_close_order_id;
   if (!orderId || !getExitOrderStatus) return null;
@@ -694,6 +744,7 @@ async function settlePendingCloseOrder({
         fullClosePosition,
         onNotify,
         updatePendingClose,
+        strategy,
         notifyMeta: hardStopNotifyMeta,
       }),
       {
@@ -750,6 +801,7 @@ async function settlePendingCloseOrder({
           fullClosePosition,
           onNotify,
           updatePendingClose,
+          strategy,
           notifyMeta: isHardStop ? { ...hardStopNotifyMeta, escalated: true } : null,
         });
       },
@@ -780,6 +832,7 @@ async function settlePendingCloseOrder({
           fullClosePosition,
           onNotify,
           updatePendingClose,
+          strategy,
           notifyMeta: isHardStop ? { ...hardStopNotifyMeta, escalated: true } : null,
         }),
         {
@@ -839,16 +892,52 @@ async function settlePendingCloseOrder({
  * `awaitingFillDetails` means that order is the exit but price/qty are not
  * printable yet — callers must not relabel it broker_already_flat.
  */
+function clearStopIdentity(position) {
+  position.broker_stop_order_id = null;
+  position.broker_stop_trigger_price = null;
+  position.broker_stop_pnl_frac = null;
+}
+
+/**
+ * An exit can leave a broker stop id off the position so it is not an adopted
+ * protective stop. The next reconcile GETs that id before any sell decision.
+ */
+function attachUnadoptedStop(position, brokerStop) {
+  if (position?.broker_stop_order_id) return false;
+  const strategy = brokerStop?.strategy;
+  if (!strategy) return false;
+  const pending = lookupUnconfirmedStop(strategy, position);
+  if (!pending?.orderId) return false;
+  if (pending.state === STOP_STATE.ABSENT || pending.state === STOP_STATE.NONE) return false;
+  position.broker_stop_order_id = pending.orderId;
+  return true;
+}
+
 export async function reconcileFilledBrokerStop(position, brokerStop) {
-  if (!brokerStop?.enabled || !position?.broker_stop_order_id) {
+  if (!brokerStop?.enabled || !position) {
+    return { booked: null, awaitingFillDetails: false };
+  }
+  const strategy = brokerStop.strategy || null;
+  const temporaryId = attachUnadoptedStop(position, brokerStop);
+  if (!position.broker_stop_order_id) {
     return { booked: null, awaitingFillDetails: false };
   }
   if (typeof brokerStop.checkFill !== 'function') {
+    if (temporaryId) clearStopIdentity(position);
     return { booked: null, awaitingFillDetails: false };
   }
 
   const fill = await brokerStop.checkFill(position);
+  if (fill?.unknown) {
+    const orderId = position.broker_stop_order_id;
+    if (strategy) {
+      rememberUnconfirmedStop(strategy, position, orderId, STOP_STATE.UNKNOWN);
+    }
+    if (temporaryId) clearStopIdentity(position);
+    return { booked: null, awaitingFillDetails: false, unknown: true, fill };
+  }
   if (fill?.filled && typeof brokerStop.onStopFilled === 'function') {
+    if (strategy) forgetUnconfirmedStop(strategy, position, position.broker_stop_order_id);
     const booked = await brokerStop.onStopFilled(position, fill);
     if (booked?.skipped || booked?.reason === 'stop_fill_unconfirmed') {
       return { booked: null, awaitingFillDetails: true, result: booked };
@@ -856,13 +945,28 @@ export async function reconcileFilledBrokerStop(position, brokerStop) {
     return { booked, awaitingFillDetails: false };
   }
   if (fill?.awaitingFillDetails) {
+    if (temporaryId && typeof brokerStop.noteReconciledStop === 'function') {
+      if (strategy) forgetUnconfirmedStop(strategy, position, position.broker_stop_order_id);
+      await brokerStop.noteReconciledStop(position);
+    }
     return { booked: null, awaitingFillDetails: true, fill };
   }
-  if (fill?.status?.isTerminal && !fill?.filled && typeof brokerStop.clearStopState === 'function') {
-    await brokerStop.clearStopState(position);
-    position.broker_stop_order_id = null;
-    position.broker_stop_trigger_price = null;
-    position.broker_stop_pnl_frac = null;
+  const orderIsAbsent =
+    Boolean(fill?.gone) || (Boolean(fill?.status?.isTerminal) && !fill?.filled);
+  if (orderIsAbsent) {
+    const orderId = position.broker_stop_order_id;
+    if (strategy) forgetUnconfirmedStop(strategy, position, orderId);
+    if (typeof brokerStop.clearStopState === 'function') {
+      await brokerStop.clearStopState(position);
+    }
+    clearStopIdentity(position);
+    return { booked: null, awaitingFillDetails: false, fill };
+  }
+  if (temporaryId) {
+    if (strategy) forgetUnconfirmedStop(strategy, position, position.broker_stop_order_id);
+    if (typeof brokerStop.noteReconciledStop === 'function') {
+      await brokerStop.noteReconciledStop(position);
+    }
   }
   return { booked: null, awaitingFillDetails: false, fill };
 }
@@ -886,6 +990,7 @@ export async function handleLadderPositionMonitor(position, {
   fullPositionExits = false,
   getOpenPosition = null,
   settleIfBrokerFlat = null,
+  strategy = null,
 }) {
   if (isFlattenRetryInFlight(position.id)) {
     return {
@@ -898,6 +1003,14 @@ export async function handleLadderPositionMonitor(position, {
 
   // Identifiable stop fill wins over broker_already_flat and does not need a quote.
   const stopReconcile = await reconcileFilledBrokerStop(position, brokerStop);
+  if (stopReconcile?.unknown) {
+    return {
+      position,
+      skipped: true,
+      reason: 'stop_status_unknown',
+      closeReason: null,
+    };
+  }
   if (stopReconcile?.booked) {
     return stopReconcile.booked;
   }
@@ -915,6 +1028,7 @@ export async function handleLadderPositionMonitor(position, {
     try {
       const settled = await settleIfBrokerFlat(position);
       if (settled?.settled) {
+        releaseStopBookIfIdle(strategy, position.id);
         return {
           position,
           reason: settled.reason,
@@ -954,6 +1068,7 @@ export async function handleLadderPositionMonitor(position, {
       updatePendingClose,
       getOpenPosition,
       hardStopPct,
+      strategy,
     });
     if (settled?.brokerFillConfirmed || settled?.reason) {
       return settled;
@@ -1021,8 +1136,18 @@ export async function handleLadderPositionMonitor(position, {
 
   if (decision.action === 'scale_out') {
     const closeQty = decision.contracts;
+    const blocked = deferCompetingStopClose(position, strategy, { ownExit: false });
+    if (blocked) return blocked;
     if (brokerStopActive) {
-      await brokerStop.cancelStop(position);
+      const cancelResult = await brokerStop.cancelStop(position);
+      if (!isCancelConfirmed(cancelResult)) {
+        return {
+          position,
+          deferred: true,
+          reason: cancelResult?.reason || 'cancel_unconfirmed',
+          closeReason: null,
+        };
+      }
       position.broker_stop_order_id = null;
     }
     const closeResult = await closeBrokerOrder(position, currentPremium, closeQty);
@@ -1042,6 +1167,7 @@ export async function handleLadderPositionMonitor(position, {
         fullClosePosition,
         onNotify,
         updatePendingClose,
+        strategy,
       });
     }
     if (!closeFillIsConfirmed(closeResult)) {
@@ -1119,6 +1245,7 @@ export async function handleLadderPositionMonitor(position, {
       updatePendingClose,
       getOpenPosition,
       hardStopPct,
+      strategy,
     });
   }
 

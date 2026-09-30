@@ -588,7 +588,7 @@ describe('Test 4 — accepted stop with failed GET cannot create a duplicate sto
     const acceptedId = stopPosts()[0]?.id || null;
     const afterSinglePlace = stopPosts().length;
 
-    const retryPosition = { ...position, id: 421, broker_stop_order_id: null };
+    const retryPosition = { ...position, id: 420, broker_stop_order_id: null };
     await ensureInitialBrokerStopUntilProtected(retryPosition, {
       strategy: 'premarket',
       environment: 'paper',

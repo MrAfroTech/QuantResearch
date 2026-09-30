@@ -88,6 +88,7 @@ const RISK_EXIT_REASONS = new Set([
   LADDER_CLOSE_REASON.TIME_STOP,
   LADDER_CLOSE_REASON.TRAILING_STOP,
   LADDER_CLOSE_REASON.FORCED_CLOSE_EOD,
+  'partial_lock_trail',
 ]);
 
 export function isRiskExitReason(reason) {

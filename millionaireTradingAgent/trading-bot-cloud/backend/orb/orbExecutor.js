@@ -495,6 +495,14 @@ async function tryExecuteEntry(entry) {
       console.log(
         `[ORB] OTO stop resting #${positionId} order=${order.stopOrderId} trigger=$${order.stopTrigger ?? stopParams?.stopTrigger}`
       );
+    } else if (order.stopAlignReason === 'child_already_filled') {
+      const fillPx = Number(order.stopFillPrice);
+      const fillQty = Math.floor(Number(order.stopFillQuantity) || 0);
+      if (Number.isFinite(fillPx) && fillPx > 0 && fillQty >= 1) {
+        const entry = Number(openedPosition.entry_premium);
+        const pnlFrac = Number.isFinite(entry) && entry > 0 ? (fillPx - entry) / entry : 0;
+        await closeOrbPosition(positionId, fillPx, pnlFrac * 100, 'stop_loss', fillQty);
+      }
     } else {
       kickInitialStopUntilProtected(
         brokerStop,

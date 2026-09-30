@@ -113,6 +113,7 @@ describe('submitAndSettleFullClose fill gate', () => {
         enabled: true,
         async cancelStop() {
           position.broker_stop_order_id = null;
+          return { cancelled: true };
         },
         async replaceStop() {
           stops.push('replaced');

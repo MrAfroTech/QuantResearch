@@ -139,6 +139,7 @@ export async function monitorOpenPositions(notifyClose) {
 
     try {
       const action = await handleLadderPositionMonitor(position, {
+        strategy: 'swing',
         currentPremium,
         initialStopPct: STOP_LOSS_PCT,
         hardStopPct: SWING_HARD_STOP_PCT,

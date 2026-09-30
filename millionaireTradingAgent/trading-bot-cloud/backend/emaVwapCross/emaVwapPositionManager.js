@@ -381,6 +381,7 @@ async function tryEmaVwapPartialLockTrailClose(position, {
 
   const settled = await submitAndSettleFullClose({
     position,
+    strategy: 'emavwap',
     closeQty,
     currentPremium: orderPremium,
     pnlFrac,
@@ -562,6 +563,7 @@ export async function monitorEmaVwapPositions() {
       const mfeLockedByRatchet = timeStop ? null : (Number(position.mfe_pct) || 0);
 
       const action = await handleLadderPositionMonitor(position, {
+        strategy: 'emavwap',
         currentPremium,
         initialStopPct: EMA_VWAP_STOP_LOSS_PCT,
         hardStopPct: EMA_VWAP_HARD_STOP_PCT,

@@ -162,11 +162,30 @@ function replaceReasonAfterInspect({ rejectedInvalid, qtyAndResting, triggerOk }
 }
 
 /**
- * Never keep a stale/cancelled OTO child id after a failed align.
- * Failed align → null so the executor kicks the unprotected-stop retry loop.
+ * Keep an id only when the stop is aligned, or when broker state is unresolved
+ * (cancel not confirmed, or an accepted stop whose GET failed).
+ * A confirmed cancel plus a failed replacement still returns null so the
+ * unprotected-stop retry may POST. Unknown is not "no order".
  */
 export function restingStopIdAfterAlign({ aligned, otoStopOrderId } = {}) {
   if (aligned?.aligned) return aligned.stopOrderId || otoStopOrderId || null;
+  const state = aligned?.stopProtectionState;
+  if (
+    state === 'CANCEL_REQUESTED_UNCONFIRMED' ||
+    state === 'PLACED_UNCONFIRMED' ||
+    state === 'UNKNOWN'
+  ) {
+    return aligned.stopOrderId || null;
+  }
+  const reason = String(aligned?.reason || '');
+  if (
+    aligned?.stopOrderId &&
+    (reason === 'cancel_unconfirmed' ||
+      reason.includes('cancel_unconfirmed') ||
+      reason === 'stop_status_unconfirmed')
+  ) {
+    return aligned.stopOrderId;
+  }
   return null;
 }
 
@@ -244,6 +263,7 @@ export async function alignOtoChildStopToFilledQty({
       aligned: false,
       replaced: false,
       reason: 'child_already_filled',
+      stopProtectionState: 'FILLED',
       stopOrderId: null,
       previousStopOrderId: stopOrderId || null,
       observedStopQty,
@@ -251,6 +271,8 @@ export async function alignOtoChildStopToFilledQty({
       expectedTrigger: expected,
       brokerDidMatch: false,
       filledQuantity: filled,
+      fillPrice: stopStatus?.fillPrice ?? null,
+      fillQuantity: stopStatus?.fillQuantity ?? null,
       nakedAfterCancel: false,
     };
   }
@@ -296,6 +318,7 @@ export async function alignOtoChildStopToFilledQty({
       aligned: false,
       replaced: false,
       reason: cancelError || 'cancel_unconfirmed',
+      stopProtectionState: 'CANCEL_REQUESTED_UNCONFIRMED',
       stopOrderId,
       previousStopOrderId: stopOrderId,
       observedStopQty,
@@ -337,6 +360,32 @@ export async function alignOtoChildStopToFilledQty({
     try {
       const placed = await placeStop(filled);
       if (placed?.orderId) {
+        const unconfirmed =
+          placed.resting === false &&
+          (placed.reason === 'stop_status_unconfirmed' ||
+            placed.stopProtectionState === 'UNKNOWN' ||
+            placed.stopProtectionState === 'PLACED_UNCONFIRMED');
+        if (unconfirmed) {
+          console.error(
+            `[OtoStop] stop ${placed.orderId} accepted but confirmation GET failed ` +
+              `filled=${filled} — keeping id, not posting another stop`
+          );
+          return {
+            aligned: false,
+            replaced: false,
+            reason: 'stop_status_unconfirmed',
+            stopProtectionState: 'PLACED_UNCONFIRMED',
+            stopOrderId: placed.orderId,
+            previousStopOrderId: stopOrderId || null,
+            observedStopQty,
+            observedTrigger,
+            expectedTrigger: expected,
+            brokerDidMatch: false,
+            filledQuantity: filled,
+            nakedAfterCancel: false,
+            attempt,
+          };
+        }
         if (attempt > 1) {
           console.error(
             `[OtoStop] stop re-placed after ${attempt} attempt(s) ` +

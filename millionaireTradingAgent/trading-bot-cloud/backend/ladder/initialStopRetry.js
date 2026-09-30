@@ -1,4 +1,16 @@
 import { getBrokerOrderStatus } from '../brokerageConnector.js';
+import {
+  STOP_STATE,
+  beginInitialStop,
+  endInitialStop,
+  isExitRequested,
+  isReplaceInFlight,
+  isUnconfirmedStopResult,
+  lookupUnconfirmedStop,
+  releaseStopBookIfIdle,
+  resetStopBookForTests,
+  unconfirmedStateForOrder,
+} from './stopBook.js';
 
 /** Same fill-poll window as waitForBrokerOrderFill (6dfc5f7). */
 export const ENTRY_FILL_WAIT_TIMEOUT_MS = 15_000;
@@ -28,6 +40,7 @@ export function nextStopRetryBackoffMs(attemptNumber) {
 
 export function resetInitialStopRetryStateForTests() {
   inFlight.clear();
+  resetStopBookForTests();
 }
 
 function stopRetryKey(strategy, positionId) {
@@ -72,15 +85,34 @@ export async function waitForEntryOrderFill(
   return last || { isFilled: false, isTerminal: false, status: 'timeout' };
 }
 
-async function readOpenState(getOpenPosition) {
+function stateBlocksAnotherPost(state) {
+  return (
+    state === STOP_STATE.PLACED_UNCONFIRMED ||
+    state === STOP_STATE.UNKNOWN ||
+    state === STOP_STATE.CANCEL_REQUESTED_UNCONFIRMED ||
+    state === STOP_STATE.FILLED
+  );
+}
+
+async function readOpenState(getOpenPosition, strategy) {
   if (typeof getOpenPosition !== 'function') {
-    return { open: true, protected: false, row: null };
+    return { open: true, protected: false, postBlocked: false, row: null };
   }
   const row = await getOpenPosition();
-  if (!row) return { open: false, protected: false, row: null };
+  if (!row) return { open: false, protected: false, postBlocked: false, row: null };
+  const pending = unconfirmedStateForOrder(row.broker_stop_order_id);
+  const owned = row.broker_stop_order_id ? null : lookupUnconfirmedStop(strategy, row);
+  const ownedUnresolved = Boolean(owned?.orderId && stateBlocksAnotherPost(owned.state));
+  const postBlocked = stateBlocksAnotherPost(pending) || ownedUnresolved;
   return {
     open: true,
-    protected: Boolean(row.broker_stop_order_id),
+    // A stored id counts as resting only when this process has not classified
+    // it as unresolved. Restart recovery classifies that id with a GET in
+    // reconcileFilledBrokerStop; it does not start this POST loop.
+    protected: Boolean(row.broker_stop_order_id) && !postBlocked && pending !== STOP_STATE.ABSENT,
+    postBlocked,
+    unresolvedOrderId: ownedUnresolved ? owned.orderId : row.broker_stop_order_id,
+    stopProtectionState: ownedUnresolved ? owned.state : pending,
     row,
   };
 }
@@ -114,13 +146,40 @@ export function ensureInitialBrokerStopUntilProtected(
   const existing = inFlight.get(key);
   if (existing) return existing;
 
+  // An exit or another stop mutation already owns this position. Do not set
+  // initialStopInFlight: the next loss exit must be able to sell.
+  if (isExitRequested(strategy, positionId) || isReplaceInFlight(strategy, positionId)) {
+    return Promise.resolve({ placed: false, reason: 'exit_requested' });
+  }
+  // Register before the first await so the same monitor pass cannot sell
+  // while this POST is still starting.
+  if (!beginInitialStop(strategy, positionId)) {
+    return Promise.resolve({ placed: false, reason: 'stop_mutation_in_flight' });
+  }
+
   const startedAt = now();
   const entryOrderId = position?.order_id || position?.orderId || null;
+  let holding = true;
+  const endAttempt = () => {
+    if (!holding) return;
+    holding = false;
+    endInitialStop(strategy, positionId);
+  };
+  const beginAttempt = () => {
+    if (holding) return true;
+    if (isExitRequested(strategy, positionId) || isReplaceInFlight(strategy, positionId)) {
+      return false;
+    }
+    if (!beginInitialStop(strategy, positionId)) return false;
+    holding = true;
+    return true;
+  };
 
   const run = (async () => {
     let attempt = 0;
     let lastAlertAt = null;
     let skipNextFlatCheck = false;
+    let confirmedFlat = false;
 
     const abortIfBrokerFlat = async (row) => {
       if (typeof isBrokerStillLong !== 'function') return null;
@@ -138,9 +197,10 @@ export function ensureInitialBrokerStopUntilProtected(
       console.error(
         `[LadderStop][${strategy}] UNPROTECTED retry stopped — broker already flat #${positionId}`
       );
+      let settled = null;
       if (typeof onBrokerAlreadyFlat === 'function') {
         try {
-          await onBrokerAlreadyFlat({ position: row || position, attempt });
+          settled = await onBrokerAlreadyFlat({ position: row || position, attempt });
         } catch (err) {
           console.error(
             `[LadderStop][${strategy}] broker-flat settle failed #${positionId}:`,
@@ -148,15 +208,23 @@ export function ensureInitialBrokerStopUntilProtected(
           );
         }
       }
-      return { placed: false, reason: 'broker_already_flat', brokerFlat: true, attempt };
+      return {
+        placed: false,
+        reason: 'broker_already_flat',
+        brokerFlat: true,
+        settled: Boolean(settled?.settled),
+        attempt,
+      };
     };
 
+    try {
     while (true) {
-      const state = await readOpenState(getOpenPosition);
+      const state = await readOpenState(getOpenPosition, strategy);
       if (!state.open) {
         console.log(
           `[LadderStop][${strategy}] Stop retry stopped — #${positionId} no longer open`
         );
+        confirmedFlat = true;
         return { placed: false, reason: 'position_closed', attempt };
       }
       if (state.protected) {
@@ -170,12 +238,38 @@ export function ensureInitialBrokerStopUntilProtected(
           attempt,
         };
       }
+      if (state.postBlocked) {
+        console.error(
+          `[LadderStop][${strategy}] Stop id unresolved #${positionId} ` +
+            `order=${state.unresolvedOrderId || state.row.broker_stop_order_id} — GET only, not posting`
+        );
+        return {
+          placed: false,
+          unresolved: true,
+          orderId: state.unresolvedOrderId || state.row.broker_stop_order_id,
+          reason: 'stop_status_unconfirmed',
+          stopProtectionState:
+            state.stopProtectionState || unconfirmedStateForOrder(state.row.broker_stop_order_id),
+          attempt,
+        };
+      }
 
       if (attempt >= 1 && !skipNextFlatCheck) {
         const flat = await abortIfBrokerFlat(state.row || position);
-        if (flat) return flat;
+        if (flat) {
+          if (flat.settled) confirmedFlat = true;
+          return flat;
+        }
       }
       skipNextFlatCheck = false;
+
+      if (isExitRequested(strategy, positionId) || isReplaceInFlight(strategy, positionId)) {
+        endAttempt();
+        return { placed: false, reason: 'exit_requested', attempt };
+      }
+      if (!beginAttempt()) {
+        return { placed: false, reason: 'exit_requested', attempt };
+      }
 
       attempt += 1;
       let result;
@@ -183,6 +277,10 @@ export function ensureInitialBrokerStopUntilProtected(
         result = await placeStop(state.row || position);
       } catch (err) {
         result = { placed: false, reason: err.message, error: err };
+      } finally {
+        // The backoff sleep is not a broker mutation. The next monitor
+        // cycle may sell once this attempt has finished.
+        endAttempt();
       }
 
       if (result?.placed) {
@@ -194,10 +292,22 @@ export function ensureInitialBrokerStopUntilProtected(
         return { ...result, attempt, elapsedMs: elapsed };
       }
 
+      if (isUnconfirmedStopResult(result)) {
+        console.error(
+          `[LadderStop][${strategy}] Stop accepted but unresolved #${positionId} ` +
+            `order=${result.orderId || 'none'} reason=${result.reason || result.stopProtectionState} ` +
+            `— not posting another stop`
+        );
+        return { ...result, placed: false, unresolved: true, attempt };
+      }
+
       const reason = result?.reason || 'unknown';
       if (!isEntryNotFilledStopConflict(reason)) {
         const flat = await abortIfBrokerFlat(state.row || position);
-        if (flat) return flat;
+        if (flat) {
+          if (flat.settled) confirmedFlat = true;
+          return flat;
+        }
       }
       const elapsed = now() - startedAt;
       console.error(
@@ -231,6 +341,7 @@ export function ensureInitialBrokerStopUntilProtected(
         while (true) {
           const fillState = await readOpenState(getOpenPosition);
           if (!fillState.open) {
+            confirmedFlat = true;
             return { placed: false, reason: 'position_closed', attempt };
           }
           if (fillState.protected) {
@@ -270,7 +381,10 @@ export function ensureInitialBrokerStopUntilProtected(
 
           if (fill?.aborted) {
             const after = await readOpenState(getOpenPosition);
-            if (!after.open) return { placed: false, reason: 'position_closed', attempt };
+            if (!after.open) {
+              confirmedFlat = true;
+              return { placed: false, reason: 'position_closed', attempt };
+            }
             if (after.protected) {
               return {
                 placed: true,
@@ -313,6 +427,10 @@ export function ensureInitialBrokerStopUntilProtected(
           `attempt=${attempt}`
       );
       await sleep(waitMs);
+    }
+    } finally {
+      endAttempt();
+      if (confirmedFlat) releaseStopBookIfIdle(strategy, positionId);
     }
   })()
     .catch((err) => {
