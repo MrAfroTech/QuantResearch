@@ -249,7 +249,7 @@ describe('formatHardStopSlippageLabel', () => {
         limit_price: null,
         limit_price_present: true,
       }),
-      '$1.07→$1.17 (+$10.00 / +7.97%) · broker stop'
+      '$1.15→$1.17 (+$2.00 / +1.59%) · broker stop'
     );
   });
 
