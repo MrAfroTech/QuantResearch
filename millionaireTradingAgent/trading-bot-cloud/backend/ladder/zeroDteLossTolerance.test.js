@@ -80,7 +80,7 @@ describe('0DTE initial loss tolerance', () => {
 });
 
 describe('0DTE profit ratchet floors', () => {
-  it('arms at +3%, steps +7.5 points through +48%, then +10 points from +58%', () => {
+  it('arms at +3% on a breakeven floor, then locks +13.5%', () => {
     assert.equal(PARTIAL_LOCK_TRAIL_START_PCT, 0.03);
     assert.equal(PARTIAL_LOCK_TRAIL_STEP_THROUGH_48, 0.075);
     assert.equal(PARTIAL_LOCK_TRAIL_STEP_AFTER_50, 0.1);
@@ -90,11 +90,11 @@ describe('0DTE profit ratchet floors', () => {
     assert.equal(EMA_VWAP_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
 
     assert.equal(trailFloorFromPeak(0.029), null);
-    assert.equal(trailFloorFromPeak(0.03), 0.03);
-    assert.equal(trailFloorFromPeak(0.12), 0.105);
-    assert.equal(trailFloorFromPeak(0.18), 0.18);
-    assert.equal(trailFloorFromPeak(0.5), 0.48);
-    assert.equal(trailFloorFromPeak(0.58), 0.58);
+    assert.equal(trailFloorFromPeak(0.03), 0);
+    assert.equal(trailFloorFromPeak(0.12), 0);
+    assert.equal(trailFloorFromPeak(0.18), 0.135);
+    assert.equal(trailFloorFromPeak(0.5), 0.425);
+    assert.equal(trailFloorFromPeak(0.6), 0.585);
 
     const held = evaluateSteppedPartialLockTrail({
       pnlFrac: 0.12,
@@ -102,16 +102,16 @@ describe('0DTE profit ratchet floors', () => {
       closeReason: 'partial_lock_trail',
     });
     assert.equal(held.action, 'hold');
-    assert.equal(held.trailFloor, 0.105);
+    assert.equal(held.trailFloor, 0);
 
     const closed = evaluateSteppedPartialLockTrail({
-      pnlFrac: 0.105,
-      mfeFrac: 0.12,
+      pnlFrac: 0.135,
+      mfeFrac: 0.16,
       closeReason: 'partial_lock_trail',
     });
     assert.equal(closed.action, 'close_all');
     assert.equal(closed.reason, 'partial_lock_trail');
-    assert.equal(closed.trailFloor, 0.105);
+    assert.equal(closed.trailFloor, 0.135);
 
     const hardOwns = evaluateSteppedPartialLockTrail({
       pnlFrac: -0.25,

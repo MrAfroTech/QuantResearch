@@ -1,24 +1,33 @@
 /**
- * Shared 0DTE profit-trail rungs.
- * Arm at +3%, then +7.5 percentage points through +48%:
- *   +3%, +10.5%, +18%, +25.5%, +33%, +40.5%, +48%.
- * Once the ratchet is in the 50% range, floors increase by +10 points:
- *   +58%, +68%, … up to the +1000% ceiling.
+ * Shared 0DTE profit-trail rungs for ORB, Premarket, and EMA/VWAP.
+ * +3% activates the trail. It is not a profit lock.
+ * The first resting floor is breakeven (0). The profit rungs are then
+ *   +13.5%, +27.5%, +42.5%, +58.5%, +73.5%, +88.5%,
+ * and +15 points per rung after that, up to the +1000% ceiling.
  * Floor is the highest rung the peak has reached. It never moves down.
  * These are protected floors, not sell targets.
  */
 
 export const PARTIAL_LOCK_TRAIL_START_PCT = 0.03;
+/** Retained for the risk snapshot. The live grid is PARTIAL_LOCK_TRAIL_RUNGS. */
 export const PARTIAL_LOCK_TRAIL_STEP_THROUGH_48 = 0.075;
+/** Retained for the risk snapshot. The live grid is PARTIAL_LOCK_TRAIL_RUNGS. */
 export const PARTIAL_LOCK_TRAIL_STEP_AFTER_50 = 0.10;
-/** Inclusive ceiling. The last +10 rung at or below this is 9.98 (998%). */
+/** Inclusive ceiling. Later +15-point rungs stop at the last step still <= this. */
 export const PARTIAL_LOCK_TRAIL_MAX_PCT = 10;
 
+/** Profit locks only. +3% is the activation threshold and is intentionally absent. */
+const PARTIAL_LOCK_TRAIL_LISTED_BPS = Object.freeze([1350, 2750, 4250, 5850, 7350, 8850]);
+const PARTIAL_LOCK_TRAIL_STEP_AFTER_LISTED_BPS = 1500;
+
 function buildPartialLockTrailRungs() {
-  const rungs = [];
-  // Basis points avoid 0.075 binary drift (300, 1050, …, 4800, then 5800, 6800, …).
-  for (let bps = 300; bps <= 4800; bps += 750) rungs.push(bps / 10000);
-  for (let bps = 5800; bps <= PARTIAL_LOCK_TRAIL_MAX_PCT * 10000; bps += 1000) {
+  const rungs = PARTIAL_LOCK_TRAIL_LISTED_BPS.map((bps) => bps / 10000);
+  const ceiling = PARTIAL_LOCK_TRAIL_MAX_PCT * 10000;
+  for (
+    let bps = PARTIAL_LOCK_TRAIL_LISTED_BPS.at(-1) + PARTIAL_LOCK_TRAIL_STEP_AFTER_LISTED_BPS;
+    bps <= ceiling;
+    bps += PARTIAL_LOCK_TRAIL_STEP_AFTER_LISTED_BPS
+  ) {
     rungs.push(bps / 10000);
   }
   return Object.freeze(rungs);
@@ -27,12 +36,13 @@ function buildPartialLockTrailRungs() {
 export const PARTIAL_LOCK_TRAIL_RUNGS = buildPartialLockTrailRungs();
 
 /**
- * Highest grid rung the peak has printed (inclusive). Null below the 3% arm.
+ * Highest grid rung the peak has printed (inclusive).
+ * Null below the 3% arm. From the arm until +13.5%, the floor is breakeven (0).
  */
 export function trailFloorFromPeak(peakMfe, rungs = PARTIAL_LOCK_TRAIL_RUNGS) {
   const peak = Number(peakMfe);
   if (!Number.isFinite(peak) || peak < PARTIAL_LOCK_TRAIL_START_PCT) return null;
-  let floor = PARTIAL_LOCK_TRAIL_START_PCT;
+  let floor = 0;
   for (const rung of rungs) {
     if (rung <= peak + 1e-12) floor = rung;
     else break;

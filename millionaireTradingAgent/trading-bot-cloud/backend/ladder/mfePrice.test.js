@@ -149,8 +149,8 @@ describe('MFE advance from the selected price', () => {
     assert.equal(selection.selectedPrice, 1.4);
     assert.ok(planned.mfeFrac > stored.mfe_pct);
     assert.ok(Math.abs(planned.mfeFrac - (1.4 - entry) / entry) < 1e-12);
-    assert.equal(planned.floor, 0.405);
-    assert.equal(trailFloorFromPeak(0.18), 0.18);
+    assert.equal(planned.floor, 0.275);
+    assert.equal(trailFloorFromPeak(0.18), 0.135);
     const at18 = planExcursionUpdate(
       { ...stored, mfe_pct: 0 },
       {
@@ -159,10 +159,10 @@ describe('MFE advance from the selected price', () => {
         selection: { ...selection, selectedPrice: entry * 1.18 },
       }
     );
-    assert.equal(at18.floor, 0.18);
+    assert.equal(at18.floor, 0.135);
     assert.deepEqual(
-      [0.03, 0.105, 0.18].filter((rung) => rung <= at18.floor + 1e-12),
-      [0.03, 0.105, 0.18]
+      [0.135, 0.275].filter((rung) => rung <= at18.floor + 1e-12),
+      [0.135]
     );
     assert.equal(planned.advanceEvent.type, 'mfe_advance');
     assert.equal(planned.advanceEvent.selected_mfe_price, 1.4);
@@ -172,8 +172,8 @@ describe('MFE advance from the selected price', () => {
     assert.equal(planned.advanceEvent.last, 1.4);
     assert.equal(planned.advanceEvent.observed_at, '2026-09-29T16:45:00.000Z');
     assert.equal(planned.advanceEvent.mfe_pct, planned.mfeFrac);
-    assert.equal(planned.advanceEvent.ratchet_floor, 0.405);
-    assert.equal(planned.advanceEvent.broker_stop_trigger, computeStopTriggerPrice(entry, 0.405));
+    assert.equal(planned.advanceEvent.ratchet_floor, 0.275);
+    assert.equal(planned.advanceEvent.broker_stop_trigger, computeStopTriggerPrice(entry, 0.275));
   });
 
   it('does not decrease MFE when a later observation is lower', () => {
