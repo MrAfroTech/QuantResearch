@@ -527,7 +527,7 @@ async function tryExecuteEntry(entry) {
       }),
     });
 
-    // Premarket: resting broker stop tracks flat SOFT (7%); hard 10.5% is poll/attribution.
+    // Premarket: resting broker stop tracks flat SOFT (5.75%); hard 8.5% is poll/attribution.
     const brokerStop = createLadderBrokerStopHandlers({
       strategy: 'premarket',
       environment,

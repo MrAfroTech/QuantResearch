@@ -28,14 +28,14 @@ export function getOrbMaxPositions(environment) {
  */
 export const ORB_PROFIT_PCT = 0.175;
 /**
- * ORB primary soft stop (poll + resting broker stop_market). Flat 7% — not IV-scaled.
+ * ORB primary soft stop (poll + resting broker stop_market). Flat 5.75% — not IV-scaled.
  */
-export const ORB_STOP_LOSS_PCT = 0.07;
+export const ORB_STOP_LOSS_PCT = 0.0575;
 /**
- * ORB hard backstop (poll hard_stop + broker-fill attribution). Flat 10.5% — not IV-scaled.
- * Independent of shared LADDER_HARD_STOP_PCT. Same 7% / 10.5% pair as Premarket and EMA/VWAP.
+ * ORB hard backstop (poll hard_stop + broker-fill attribution). Flat 8.5% — not IV-scaled.
+ * Independent of shared LADDER_HARD_STOP_PCT. Same 5.75% / 8.5% pair as Premarket and EMA/VWAP.
  */
-export const ORB_HARD_STOP_PCT = 0.105;
+export const ORB_HARD_STOP_PCT = 0.085;
 
 /**
  * Profit trail arm: first lock rung is +3%, then +5% through +100%,
