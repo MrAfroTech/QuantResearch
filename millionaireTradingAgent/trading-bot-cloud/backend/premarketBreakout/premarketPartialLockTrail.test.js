@@ -106,9 +106,9 @@ describe('shouldRaisePartialLockBrokerStop', () => {
     assert.equal(check.desiredTrigger, 0.65);
   });
 
-  it('raises an 8% protective stop to the same trail floor', () => {
-    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.08);
-    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.135);
+  it('raises a 7% protective stop to the same trail floor', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.07);
+    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.105);
     const entry = position.entry_premium;
     const protective = computeStopTriggerPrice(entry, -PREMARKET_STOP_LOSS_PCT);
     assert.equal(protective, 0.57);

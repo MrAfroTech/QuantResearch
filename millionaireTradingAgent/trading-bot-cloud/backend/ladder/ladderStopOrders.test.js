@@ -55,14 +55,14 @@ describe('resolveBrokerStopCloseReason', () => {
     assert.equal(resolveBrokerStopCloseReason(0.2, null), LADDER_CLOSE_REASON.TRAILING_STOP);
   });
 
-  it('keeps an 8% fill as stop_loss and a 13.5% fill as hard_stop for every 0DTE strategy', () => {
+  it('keeps a 7% fill as stop_loss and a 10.5% fill as hard_stop for every 0DTE strategy', () => {
     for (const soft of [ORB_STOP_LOSS_PCT, PREMARKET_STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT]) {
-      assert.equal(soft, 0.08);
+      assert.equal(soft, 0.07);
     }
     for (const hard of [ORB_HARD_STOP_PCT, PREMARKET_HARD_STOP_TRIGGER, EMA_VWAP_HARD_STOP_PCT]) {
-      assert.equal(hard, 0.135);
-      assert.equal(resolveBrokerStopCloseReason(-0.08, hard), LADDER_CLOSE_REASON.STOP_LOSS);
-      assert.equal(resolveBrokerStopCloseReason(-0.135, hard), LADDER_CLOSE_REASON.HARD_STOP);
+      assert.equal(hard, 0.105);
+      assert.equal(resolveBrokerStopCloseReason(-0.07, hard), LADDER_CLOSE_REASON.STOP_LOSS);
+      assert.equal(resolveBrokerStopCloseReason(-0.105, hard), LADDER_CLOSE_REASON.HARD_STOP);
       assert.equal(resolveBrokerStopCloseReason(-0.02, hard), LADDER_CLOSE_REASON.STOP_LOSS);
       assert.equal(resolveBrokerStopCloseReason(-0.0175, hard), LADDER_CLOSE_REASON.STOP_LOSS);
       assert.equal(resolveBrokerStopCloseReason(-0.01, hard), LADDER_CLOSE_REASON.STOP_LOSS);

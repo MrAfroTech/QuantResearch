@@ -17,9 +17,9 @@ import { OPTION_OPENING_COMMISSION_PER_CONTRACT } from '../ladder/ladderConfig.j
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe('EMA/VWAP go-live prerequisites', () => {
-  it('uses 8% soft / 13.5% hard stops', () => {
-    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.08);
-    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.135);
+  it('uses 7% soft / 10.5% hard stops', () => {
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.07);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.105);
   });
 
   it('hard-caps EMA/VWAP at 1 contract even when max-affordable would allow more', () => {
@@ -44,10 +44,10 @@ describe('EMA/VWAP go-live prerequisites', () => {
     assert.equal(sizing.requiredCost, 41);
   });
 
-  it('enforces $0.85 min entry premium floor (no max band)', () => {
+  it('enforces $0.50 min entry premium floor (no max band)', () => {
     const cfg = readFileSync(join(here, 'emaVwapConfig.js'), 'utf8');
     const exec = readFileSync(join(here, 'emaVwapExecutor.js'), 'utf8');
-    assert.match(cfg, /EMA_VWAP_MIN_ENTRY_PREMIUM\s*=\s*0\.85/);
+    assert.match(cfg, /EMA_VWAP_MIN_ENTRY_PREMIUM\s*=\s*0\.5/);
     assert.doesNotMatch(cfg, /EMA_VWAP_MAX_ENTRY_PREMIUM/);
     assert.doesNotMatch(cfg, /isEmaVwapPremiumOutsideBand/);
     assert.doesNotMatch(exec, /isEmaVwapPremiumOutsideBand/);

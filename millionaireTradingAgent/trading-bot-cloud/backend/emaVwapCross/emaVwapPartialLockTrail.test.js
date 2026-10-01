@@ -110,9 +110,9 @@ describe('shouldRaiseEmaVwapPartialLockBrokerStop', () => {
     assert.equal(check.desiredTrigger, 0.65);
   });
 
-  it('raises an 8% protective stop to the same trail floor', () => {
-    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.08);
-    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.135);
+  it('raises a 7% protective stop to the same trail floor', () => {
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.07);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.105);
     const entry = position.entry_premium;
     const protective = computeStopTriggerPrice(entry, -EMA_VWAP_STOP_LOSS_PCT);
     assert.equal(protective, 0.57);

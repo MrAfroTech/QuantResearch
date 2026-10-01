@@ -559,24 +559,24 @@ describe('evaluateLadderExit full-position (ORB/Premarket/EMA)', () => {
     fullPositionExits: true,
   };
 
-  it('uses the approved 8% initial and 13.5% hard stops, not 1% / 1.75% / 2%', () => {
+  it('uses the approved 7% initial and 10.5% hard stops, not 1% / 1.75% / 2%', () => {
     const retired = [0.01, 0.0175, 0.02];
     for (const [soft, hard] of [
       [ORB_STOP_LOSS_PCT, ORB_HARD_STOP_PCT],
       [PREMARKET_STOP_LOSS_PCT, PREMARKET_HARD_STOP_TRIGGER],
       [EMA_VWAP_STOP_LOSS_PCT, EMA_VWAP_HARD_STOP_PCT],
     ]) {
-      assert.equal(soft, 0.08);
-      assert.equal(hard, 0.135);
+      assert.equal(soft, 0.07);
+      assert.equal(hard, 0.105);
       assert.equal(retired.includes(soft), false);
       assert.equal(retired.includes(hard), false);
     }
-    assert.equal(base.initialStopPct, 0.08);
-    assert.equal(base.hardStopPct, 0.135);
+    assert.equal(base.initialStopPct, 0.07);
+    assert.equal(base.hardStopPct, 0.105);
   });
 
-  it('hard stop closes the entire book at -13.5%', () => {
-    const d = evaluateLadderExit({ ...base, pnlFrac: -0.135 });
+  it('hard stop closes the entire book at -10.5%', () => {
+    const d = evaluateLadderExit({ ...base, pnlFrac: -0.105 });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, LADDER_CLOSE_REASON.HARD_STOP);
     assert.equal(d.contracts, 5);
@@ -612,7 +612,7 @@ describe('evaluateLadderExit full-position (ORB/Premarket/EMA)', () => {
     assert.equal(d.reason, LADDER_CLOSE_REASON.TIME_STOP);
   });
 
-  it('soft stop closes the entire book at -8%, short of the hard stop', () => {
+  it('soft stop closes the entire book at -7%, short of the hard stop', () => {
     const d = evaluateLadderExit({ ...base, pnlFrac: -base.initialStopPct });
     assert.equal(d.action, 'close_all');
     assert.equal(d.reason, LADDER_CLOSE_REASON.STOP_LOSS);

@@ -53,9 +53,9 @@ export const PREMARKET_LIVE_ENTRIES_PAUSED_REASON = 'premarket_live_entries_paus
 export const PREMARKET_PROFIT_PCT = 0.175;
 /**
  * Primary soft stop (fraction of premium) — poll stop_loss + resting broker stop_market.
- * Flat 8% — not IV-scaled. Hard backstop is PREMARKET_HARD_STOP_TRIGGER.
+ * Flat 7% — not IV-scaled. Hard backstop is PREMARKET_HARD_STOP_TRIGGER.
  */
-export const PREMARKET_STOP_LOSS_PCT = 0.08;
+export const PREMARKET_STOP_LOSS_PCT = 0.07;
 
 /**
  * Premarket-only pre-milestone partial-lock trail.
@@ -72,10 +72,10 @@ export const PREMARKET_PARTIAL_LOCK_CLOSE_REASON = 'partial_lock_trail';
 
 /**
  * Premarket hard backstop (fraction of premium) — poll hard_stop + fill-attribution ceiling.
- * Flat 13.5% — not IV-scaled. Soft is primary on the resting broker order.
- * Same 8% / 13.5% pair as ORB and EMA/VWAP.
+ * Flat 10.5% — not IV-scaled. Soft is primary on the resting broker order.
+ * Same 7% / 10.5% pair as ORB and EMA/VWAP.
  */
-export const PREMARKET_HARD_STOP_TRIGGER = 0.135;
+export const PREMARKET_HARD_STOP_TRIGGER = 0.105;
 
 /**
  * Legacy / display name for Premarket's hard-stop level. Exit path uses
@@ -86,9 +86,9 @@ export const PREMARKET_HARD_STOP_PCT = PREMARKET_HARD_STOP_TRIGGER;
 
 /**
  * Minimum option entry premium (ask / entry quote) to open a position.
- * Raised account-wide to $0.85 (was $0.30).
+ * Account-wide floor is $0.50.
  */
-export const PREMARKET_MIN_ENTRY_PREMIUM = 0.85;
+export const PREMARKET_MIN_ENTRY_PREMIUM = 0.5;
 
 /** premarket_event_log event_type when entry ask/premium is below PREMARKET_MIN_ENTRY_PREMIUM. */
 export const ENTRY_BELOW_PREMIUM_FLOOR_REASON = 'entry_below_premium_floor';
@@ -114,8 +114,8 @@ export const PREMARKET_IV_STOP_MULT_CAP = 2;
 
 /**
  * Premarket stop levels for poll + broker.
- * Soft is ALWAYS the flat PREMARKET_STOP_LOSS_PCT (8%) — IV scaling removed.
- * Hard is ALWAYS PREMARKET_HARD_STOP_TRIGGER (13.5%).
+ * Soft is ALWAYS the flat PREMARKET_STOP_LOSS_PCT (7%) — IV scaling removed.
+ * Hard is ALWAYS PREMARKET_HARD_STOP_TRIGGER (10.5%).
  * softStopBase override still honored when Tier-1 runtime params pass an explicit base
  * (still not IV-multiplied).
  */

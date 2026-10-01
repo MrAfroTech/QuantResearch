@@ -39,26 +39,26 @@ import { reconcileFilledBrokerStop } from './ladderExit.js';
 import { LADDER_CLOSE_REASON } from './ladderConfig.js';
 
 describe('0DTE initial loss tolerance', () => {
-  it('uses an 8% initial protective stop for Premarket, EMA/VWAP, and ORB', () => {
-    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.08);
-    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.08);
-    assert.equal(ORB_STOP_LOSS_PCT, 0.08);
+  it('uses a 7% initial protective stop for Premarket, EMA/VWAP, and ORB', () => {
+    assert.equal(PREMARKET_STOP_LOSS_PCT, 0.07);
+    assert.equal(EMA_VWAP_STOP_LOSS_PCT, 0.07);
+    assert.equal(ORB_STOP_LOSS_PCT, 0.07);
     assert.equal(PREMARKET_STOP_LOSS_PCT, EMA_VWAP_STOP_LOSS_PCT);
     assert.equal(EMA_VWAP_STOP_LOSS_PCT, ORB_STOP_LOSS_PCT);
   });
 
-  it('uses a 13.5% hard stop for Premarket, EMA/VWAP, and ORB', () => {
-    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.135);
-    assert.equal(PREMARKET_HARD_STOP_PCT, 0.135);
-    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.135);
-    assert.equal(ORB_HARD_STOP_PCT, 0.135);
+  it('uses a 10.5% hard stop for Premarket, EMA/VWAP, and ORB', () => {
+    assert.equal(PREMARKET_HARD_STOP_TRIGGER, 0.105);
+    assert.equal(PREMARKET_HARD_STOP_PCT, 0.105);
+    assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.105);
+    assert.equal(ORB_HARD_STOP_PCT, 0.105);
     const iv = computePremarketIvStopPcts(0.4);
-    assert.equal(iv.softStopPct, 0.08);
-    assert.equal(iv.hardStopPct, 0.135);
+    assert.equal(iv.softStopPct, 0.07);
+    assert.equal(iv.hardStopPct, 0.105);
     assert.equal(iv.ivMult, 1);
   });
 
-  it('rests the broker stop at -8% of entry for every 0DTE strategy', () => {
+  it('rests the broker stop at -7% of entry for every 0DTE strategy', () => {
     for (const initialStopPct of [
       PREMARKET_STOP_LOSS_PCT,
       EMA_VWAP_STOP_LOSS_PCT,
@@ -73,8 +73,8 @@ describe('0DTE initial loss tolerance', () => {
         },
         { initialStopPct }
       );
-      assert.equal(params.stopPnlFrac, -0.08);
-      assert.equal(params.stopTrigger, 0.92);
+      assert.equal(params.stopPnlFrac, -0.07);
+      assert.equal(params.stopTrigger, 0.93);
     }
   });
 });
@@ -130,9 +130,9 @@ describe('entry rules and broker-stop reconciliation stay in place', () => {
     assert.equal(ORB_MAX_ENTRY_CONTRACTS, 1);
     assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 1);
     assert.equal(EMA_VWAP_MAX_ENTRY_CONTRACTS, 1);
-    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.85);
-    assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.85);
-    assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.85);
+    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.5);
+    assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.5);
+    assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.5);
     assert.deepEqual(ORB_ENTRY_WINDOW_START, { hour: 9, minute: 30 });
     assert.deepEqual(ORB_ENTRY_WINDOW_END, { hour: 15, minute: 5 });
   });

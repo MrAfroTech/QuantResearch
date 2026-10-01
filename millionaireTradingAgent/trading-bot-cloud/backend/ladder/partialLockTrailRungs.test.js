@@ -185,7 +185,7 @@ describe('breakeven arm and the +13.5% ratchet', () => {
   });
 
   it('leaves the current hard stop in force and lets it own a loss at that level', () => {
-    assert.equal(ORB_HARD_STOP_PCT, 0.135);
+    assert.equal(ORB_HARD_STOP_PCT, 0.105);
     const owned = evaluateSteppedPartialLockTrail({
       pnlFrac: -ORB_HARD_STOP_PCT,
       mfeFrac: 0.05,
