@@ -86,9 +86,9 @@ export const PREMARKET_HARD_STOP_PCT = PREMARKET_HARD_STOP_TRIGGER;
 
 /**
  * Minimum option entry premium (ask / entry quote) to open a position.
- * Account-wide floor is $0.50.
+ * Account-wide floor is $0.65.
  */
-export const PREMARKET_MIN_ENTRY_PREMIUM = 0.5;
+export const PREMARKET_MIN_ENTRY_PREMIUM = 0.65;
 
 /** premarket_event_log event_type when entry ask/premium is below PREMARKET_MIN_ENTRY_PREMIUM. */
 export const ENTRY_BELOW_PREMIUM_FLOOR_REASON = 'entry_below_premium_floor';

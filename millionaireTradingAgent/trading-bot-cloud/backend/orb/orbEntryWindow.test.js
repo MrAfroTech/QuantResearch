@@ -89,8 +89,8 @@ describe('ORB production entry/sizing constants', () => {
     assert.equal(withinOrbEntryWindow(summerCutoff), false);
   });
 
-  it('min premium floor is $0.50 and live cap is 80%', () => {
-    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.5);
+  it('min premium floor is $0.65 and live cap is 80%', () => {
+    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.65);
     assert.equal(ORB_LIVE_PER_TRADE_CAP_FRAC, 0.8);
     assert.equal(ORB_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
   });

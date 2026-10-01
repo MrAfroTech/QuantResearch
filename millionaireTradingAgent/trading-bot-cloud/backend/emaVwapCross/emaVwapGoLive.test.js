@@ -44,10 +44,10 @@ describe('EMA/VWAP go-live prerequisites', () => {
     assert.equal(sizing.requiredCost, 41);
   });
 
-  it('enforces $0.50 min entry premium floor (no max band)', () => {
+  it('enforces $0.65 min entry premium floor (no max band)', () => {
     const cfg = readFileSync(join(here, 'emaVwapConfig.js'), 'utf8');
     const exec = readFileSync(join(here, 'emaVwapExecutor.js'), 'utf8');
-    assert.match(cfg, /EMA_VWAP_MIN_ENTRY_PREMIUM\s*=\s*0\.5/);
+    assert.match(cfg, /EMA_VWAP_MIN_ENTRY_PREMIUM\s*=\s*0\.65/);
     assert.doesNotMatch(cfg, /EMA_VWAP_MAX_ENTRY_PREMIUM/);
     assert.doesNotMatch(cfg, /isEmaVwapPremiumOutsideBand/);
     assert.doesNotMatch(exec, /isEmaVwapPremiumOutsideBand/);

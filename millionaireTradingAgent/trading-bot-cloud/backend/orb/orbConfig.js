@@ -52,7 +52,7 @@ export const ORB_PARTIAL_LOCK_CLOSE_REASON = 'partial_lock_trail';
 /**
  * Minimum option entry premium to open a position.
  */
-export const ORB_MIN_ENTRY_PREMIUM = 0.5;
+export const ORB_MIN_ENTRY_PREMIUM = 0.65;
 
 /** Session window for ORB scan/monitor (ET). */
 export const ORB_SESSION_START = { hour: 9, minute: 30 };

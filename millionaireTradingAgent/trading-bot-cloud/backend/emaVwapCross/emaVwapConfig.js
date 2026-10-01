@@ -77,9 +77,9 @@ export const EMA_VWAP_PARTIAL_LOCK_CLOSE_REASON = 'partial_lock_trail';
 
 /**
  * Minimum option entry premium to open a position.
- * Account-wide floor is $0.50.
+ * Account-wide floor is $0.65.
  */
-export const EMA_VWAP_MIN_ENTRY_PREMIUM = 0.5;
+export const EMA_VWAP_MIN_ENTRY_PREMIUM = 0.65;
 
 export const EMA_VWAP_SESSION_START = { hour: 9, minute: 30 };
 export const EMA_VWAP_TIME_STOP = { hour: 15, minute: 5 };

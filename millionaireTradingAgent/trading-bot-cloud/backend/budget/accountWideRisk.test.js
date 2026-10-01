@@ -19,10 +19,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 
 describe('account-wide live risk extensions', () => {
-  it('min premium floors are $0.50 on ORB, Premarket, and EMA/VWAP', () => {
-    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.5);
-    assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.5);
-    assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.5);
+  it('min premium floors are $0.65 on ORB, Premarket, and EMA/VWAP', () => {
+    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.65);
+    assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.65);
+    assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.65);
   });
 
   it('profit trail starts at +3%, steps 7.5 points through 48%, then 10 points', () => {

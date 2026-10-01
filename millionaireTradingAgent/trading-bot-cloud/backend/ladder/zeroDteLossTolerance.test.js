@@ -130,9 +130,9 @@ describe('entry rules and broker-stop reconciliation stay in place', () => {
     assert.equal(ORB_MAX_ENTRY_CONTRACTS, 1);
     assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 1);
     assert.equal(EMA_VWAP_MAX_ENTRY_CONTRACTS, 1);
-    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.5);
-    assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.5);
-    assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.5);
+    assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.65);
+    assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.65);
+    assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.65);
     assert.deepEqual(ORB_ENTRY_WINDOW_START, { hour: 9, minute: 30 });
     assert.deepEqual(ORB_ENTRY_WINDOW_END, { hour: 15, minute: 5 });
   });
