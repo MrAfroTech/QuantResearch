@@ -39,6 +39,13 @@ export const PREMARKET_ENTRY_SIZING = Object.freeze({
 });
 
 /**
+ * Live Premarket order attempts. False blocks new live entries only.
+ * Open-position monitoring, stops, and paper entries stay on.
+ */
+export const PREMARKET_LIVE_ENTRIES_ENABLED = false;
+export const PREMARKET_LIVE_ENTRIES_PAUSED_REASON = 'premarket_live_entries_paused';
+
+/**
  * STALE / UNUSED for exits — live profit-taking for Premarket is the first ladder
  * milestone (+20%) closing the full position, plus pre-milestone partial-lock trail.
  * Kept only for analytics suggestionEngine / tradeDiagnosis display; do not wire into monitors.

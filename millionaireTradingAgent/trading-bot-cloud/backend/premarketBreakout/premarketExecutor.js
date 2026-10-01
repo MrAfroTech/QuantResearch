@@ -14,6 +14,8 @@ import {
   ENTRY_BELOW_PREMIUM_FLOOR_REASON,
   PREMARKET_MAX_SPREAD_PCT,
   SPREAD_TOO_WIDE_REJECTED_REASON,
+  PREMARKET_LIVE_ENTRIES_ENABLED,
+  PREMARKET_LIVE_ENTRIES_PAUSED_REASON,
   computePremarketIvStopPcts,
   OUTSIDE_ENTRY_WINDOW_REASON,
 } from './premarketConfig.js';
@@ -176,6 +178,14 @@ function isWithinPremarketEntryWindow(date = new Date()) {
 }
 
 async function tryExecuteEntry(entry) {
+  const environment = await getStrategyEnvironment('premarket');
+  if (environment === 'live' && !PREMARKET_LIVE_ENTRIES_ENABLED) {
+    console.log(
+      `[Premarket] ${PREMARKET_LIVE_ENTRIES_PAUSED_REASON} — no live order for ${entry.symbol} ${entry.direction}`
+    );
+    return { executed: false, reason: PREMARKET_LIVE_ENTRIES_PAUSED_REASON };
+  }
+
   const mode = await getPremarketMode();
   if (mode === 'MANUAL') {
     await sendPremarketSignalNotExecutedTelegram({
@@ -274,7 +284,6 @@ async function tryExecuteEntry(entry) {
     };
   }
 
-  const environment = await getStrategyEnvironment('premarket');
   const maxPositions = getPremarketMaxPositions(environment);
 
   const openCount = await getPremarketOpenPositionCount();
