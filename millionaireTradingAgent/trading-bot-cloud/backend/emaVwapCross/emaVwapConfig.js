@@ -5,6 +5,23 @@ import { OPTION_OPENING_COMMISSION_PER_CONTRACT } from '../ladder/ladderConfig.j
 export const EMA_VWAP_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
 
 export const EMA_VWAP_BUDGET_MAX = 299.5;
+
+/**
+ * When false, remaining strategy budget cannot reject an EMA/VWAP entry.
+ * Sizing stays at EMA_VWAP_MAX_ENTRY_CONTRACTS. The $299.50 figure remains
+ * the paper allocation / weekly top-off only.
+ */
+export const EMA_VWAP_BUDGET_GATE_ENABLED = false;
+
+/** Budget passed to the sizer. With the gate off, one contract is always fundable. */
+export function emaVwapEntrySizingBudget(budgetRemaining, premium, feePerContract = 1) {
+  const remaining = Number(budgetRemaining);
+  const safeRemaining = Number.isFinite(remaining) ? remaining : 0;
+  if (EMA_VWAP_BUDGET_GATE_ENABLED) return safeRemaining;
+  const oneContract = Number(premium) * 100 + Number(feePerContract);
+  const cost = Number.isFinite(oneContract) && oneContract > 0 ? oneContract : 0;
+  return Math.max(safeRemaining, cost);
+}
 /** Spec: max 2 concurrent open positions (was 3 — drift from documented design). */
 export const EMA_VWAP_MAX_POSITIONS = 2;
 

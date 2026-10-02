@@ -13,6 +13,8 @@ import {
   EMA_VWAP_CORRELATION_GROUP,
   CORRELATED_POSITION_BLOCK_REASON,
   EMA_VWAP_MIN_ENTRY_PREMIUM,
+  EMA_VWAP_BUDGET_GATE_ENABLED,
+  emaVwapEntrySizingBudget,
 } from './emaVwapConfig.js';
 import {
   getEmaVwapMode,
@@ -277,7 +279,7 @@ async function tryExecuteEntry(entry) {
   }
 
   const budgetRemaining = await getEmaVwapBudgetRemaining();
-  if (budgetRemaining <= 0) {
+  if (EMA_VWAP_BUDGET_GATE_ENABLED && budgetRemaining <= 0) {
     await sendEmaVwapBudgetExhaustedTelegram(await getTotalAllocated('emavwap'));
     return { executed: false, reason: 'budget_exhausted' };
   }
@@ -304,8 +306,20 @@ async function tryExecuteEntry(entry) {
     return { executed: false, reason: 'premium_below_floor' };
   }
 
-  const sizing = positionSize(budgetRemaining, openCount, strikeSelection.premium);
-  if (!sizing.affordable || sizing.quantity < 1 || sizing.totalCost > budgetRemaining) {
+  const sizing = positionSize(
+    emaVwapEntrySizingBudget(
+      budgetRemaining,
+      strikeSelection.premium,
+      OPTION_OPENING_COMMISSION_PER_CONTRACT
+    ),
+    openCount,
+    strikeSelection.premium
+  );
+  if (
+    !sizing.affordable ||
+    sizing.quantity < 1 ||
+    (EMA_VWAP_BUDGET_GATE_ENABLED && sizing.totalCost > budgetRemaining)
+  ) {
     console.log(
       `[EMA/VWAP] skip entry ${entry.symbol}: 0 contracts affordable ` +
         `budget=$${Number(budgetRemaining).toFixed(2)} premium=$${strikeSelection.premium} ` +

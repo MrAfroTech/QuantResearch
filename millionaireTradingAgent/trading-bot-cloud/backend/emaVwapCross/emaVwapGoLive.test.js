@@ -9,6 +9,8 @@ import {
   EMA_VWAP_HARD_STOP_PCT,
   EMA_VWAP_ENTRY_SIZING,
   EMA_VWAP_MAX_ENTRY_CONTRACTS,
+  EMA_VWAP_BUDGET_GATE_ENABLED,
+  emaVwapEntrySizingBudget,
 } from './emaVwapConfig.js';
 import { ORB_PREMARKET_ENTRY_SIZING } from '../ladder/ladderSizing.js';
 import { PREMARKET_ENTRY_SIZING } from '../premarketBreakout/premarketConfig.js';
@@ -42,6 +44,17 @@ describe('EMA/VWAP go-live prerequisites', () => {
     assert.equal(sizing.quantity, 0);
     assert.equal(sizing.affordable, false);
     assert.equal(sizing.requiredCost, 41);
+  });
+
+  it('does not let the strategy budget reject a 1-contract entry', () => {
+    assert.equal(EMA_VWAP_BUDGET_GATE_ENABLED, false);
+    const budget = emaVwapEntrySizingBudget(0, 1.5, 1);
+    const sizing = ladderPositionSize(budget, 1.5, EMA_VWAP_ENTRY_SIZING);
+    assert.equal(sizing.quantity, 1);
+    assert.equal(sizing.affordable, true);
+    const src = readFileSync(join(here, 'emaVwapExecutor.js'), 'utf8');
+    assert.match(src, /EMA_VWAP_BUDGET_GATE_ENABLED && budgetRemaining <= 0/);
+    assert.match(src, /emaVwapEntrySizingBudget\(/);
   });
 
   it('enforces $0.65 min entry premium floor (no max band)', () => {
