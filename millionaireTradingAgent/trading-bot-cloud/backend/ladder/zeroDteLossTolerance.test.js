@@ -127,9 +127,9 @@ describe('0DTE profit ratchet floors', () => {
 describe('entry rules and broker-stop reconciliation stay in place', () => {
   it('keeps 0DTE entry caps, premium floor, and window, with ORB entries enabled', () => {
     assert.equal(ORB_ENTRIES_ENABLED, true);
-    assert.equal(ORB_MAX_ENTRY_CONTRACTS, 2);
-    assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 2);
-    assert.equal(EMA_VWAP_MAX_ENTRY_CONTRACTS, 2);
+    assert.equal(ORB_MAX_ENTRY_CONTRACTS, 3);
+    assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 3);
+    assert.equal(EMA_VWAP_MAX_ENTRY_CONTRACTS, 3);
     assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.65);
     assert.equal(PREMARKET_MIN_ENTRY_PREMIUM, 0.65);
     assert.equal(EMA_VWAP_MIN_ENTRY_PREMIUM, 0.65);

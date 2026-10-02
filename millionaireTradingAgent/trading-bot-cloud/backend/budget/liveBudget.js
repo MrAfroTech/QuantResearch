@@ -11,12 +11,13 @@ export const LIVE_BUDGET_MAX_FRAC = 0.75;
 
 /**
  * Per-trade cap as a fraction of shared live remaining at sizing time.
- * Account-wide for live 0DTE strategies (ORB / Premarket / EMA-VWAP): 80%
- * of the remaining tradable pool (75% of account cash minus already deployed).
+ * Account-wide for live 0DTE strategies (ORB / Premarket / EMA-VWAP): 100%
+ * of the remaining tradable pool, so remaining equals the max when nothing
+ * is deployed (75% of account cash minus already deployed).
  */
-export const LIVE_PER_TRADE_CAP_FRAC = 0.8;
+export const LIVE_PER_TRADE_CAP_FRAC = 1;
 
-/** Strategy-specific overrides (all three live 0DTE strategies use 80%). */
+/** Strategy-specific overrides (all three live 0DTE strategies use 100%). */
 export const LIVE_PER_TRADE_CAP_FRAC_BY_STRATEGY = Object.freeze({
   orb: LIVE_PER_TRADE_CAP_FRAC,
   premarket: LIVE_PER_TRADE_CAP_FRAC,
@@ -66,7 +67,7 @@ export function computeLiveSharedRemaining(cashBalance, deployedAcrossLive) {
 
 /**
  * Clamp a single trade to min(sharedRemaining, sharedRemaining * capFrac).
- * With default 80%, this is 80% of shared remaining when remaining > 0.
+ * With the cap at 100%, this returns the full shared remaining when remaining > 0.
  */
 export function applyLivePerTradeCap(sharedRemaining, capFrac = LIVE_PER_TRADE_CAP_FRAC) {
   const rem = Number(sharedRemaining);

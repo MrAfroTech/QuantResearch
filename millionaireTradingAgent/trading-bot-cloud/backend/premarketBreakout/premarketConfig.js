@@ -19,16 +19,16 @@ export function getPremarketMaxPositions(environment) {
 
 /**
  * Premarket-only hard entry-size cap. Overrides max-affordable under the live
- * per-trade cap. ORB and EMA/VWAP are separately 2-capped.
+ * per-trade cap. ORB and EMA/VWAP are separately 3-capped.
  *
  * Wired at: premarketExecutor.positionSize → ladderPositionSize(..., PREMARKET_ENTRY_SIZING)
  *
  * To restore max-affordable for Premarket: set PREMARKET_MAX_ENTRY_CONTRACTS = Infinity
  * (same as ORB_PREMARKET_ENTRY_SIZING).
  */
-export const PREMARKET_MAX_ENTRY_CONTRACTS = 2;
+export const PREMARKET_MAX_ENTRY_CONTRACTS = 3;
 
-/** Premarket entry sizing — 2-contract hard cap + $1 opening commission. */
+/** Premarket entry sizing — 3-contract hard cap + $1 opening commission. */
 export const PREMARKET_ENTRY_SIZING = Object.freeze({
   maxContracts: PREMARKET_MAX_ENTRY_CONTRACTS,
   feePerContract: OPTION_OPENING_COMMISSION_PER_CONTRACT,

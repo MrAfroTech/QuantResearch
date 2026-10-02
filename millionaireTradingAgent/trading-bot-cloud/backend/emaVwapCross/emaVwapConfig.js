@@ -64,16 +64,16 @@ export const EMA_VWAP_HARD_STOP_PCT = 0.085;
 
 /**
  * EMA/VWAP-only hard entry-size cap. Overrides max-affordable under the live
- * per-trade cap. Premarket, ORB, and EMA/VWAP are each 2-capped; Swing is unaffected.
+ * per-trade cap. Premarket, ORB, and EMA/VWAP are each 3-capped; Swing is unaffected.
  *
  * Wired at: emaVwapExecutor.positionSize → ladderPositionSize(..., EMA_VWAP_ENTRY_SIZING)
  *
  * To restore max-affordable for EMA/VWAP: set EMA_VWAP_MAX_ENTRY_CONTRACTS = Infinity
  * (same as ORB_PREMARKET_ENTRY_SIZING).
  */
-export const EMA_VWAP_MAX_ENTRY_CONTRACTS = 2;
+export const EMA_VWAP_MAX_ENTRY_CONTRACTS = 3;
 
-/** EMA/VWAP entry sizing — 2-contract hard cap + $1 opening commission. */
+/** EMA/VWAP entry sizing — 3-contract hard cap + $1 opening commission. */
 export const EMA_VWAP_ENTRY_SIZING = Object.freeze({
   maxContracts: EMA_VWAP_MAX_ENTRY_CONTRACTS,
   feePerContract: OPTION_OPENING_COMMISSION_PER_CONTRACT,

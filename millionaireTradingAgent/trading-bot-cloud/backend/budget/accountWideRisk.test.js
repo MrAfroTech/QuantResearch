@@ -32,11 +32,11 @@ describe('account-wide live risk extensions', () => {
     assert.equal(PARTIAL_LOCK_TRAIL_MAX_PCT, 10);
   });
 
-  it('live per-trade cap is 80% for orb, premarket, and emavwap', () => {
-    assert.equal(LIVE_PER_TRADE_CAP_FRAC, 0.8);
-    assert.equal(livePerTradeCapFracFor('orb'), 0.8);
-    assert.equal(livePerTradeCapFracFor('premarket'), 0.8);
-    assert.equal(livePerTradeCapFracFor('emavwap'), 0.8);
+  it('live per-trade cap is 100% for orb, premarket, and emavwap', () => {
+    assert.equal(LIVE_PER_TRADE_CAP_FRAC, 1);
+    assert.equal(livePerTradeCapFracFor('orb'), 1);
+    assert.equal(livePerTradeCapFracFor('premarket'), 1);
+    assert.equal(livePerTradeCapFracFor('emavwap'), 1);
   });
 
   it('applyTrialSizing is a no-op pass-through (no 1-contract force)', () => {

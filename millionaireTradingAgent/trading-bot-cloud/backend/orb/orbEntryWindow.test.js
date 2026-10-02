@@ -89,32 +89,35 @@ describe('ORB production entry/sizing constants', () => {
     assert.equal(withinOrbEntryWindow(summerCutoff), false);
   });
 
-  it('min premium floor is $0.65 and live cap is 80%', () => {
+  it('min premium floor is $0.65 and live cap is 100%', () => {
     assert.equal(ORB_MIN_ENTRY_PREMIUM, 0.65);
-    assert.equal(ORB_LIVE_PER_TRADE_CAP_FRAC, 0.8);
+    assert.equal(ORB_LIVE_PER_TRADE_CAP_FRAC, 1);
     assert.equal(ORB_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
   });
 
-  it('hard-caps ORB at 2 contracts even when max-affordable would allow more', () => {
-    assert.equal(ORB_MAX_ENTRY_CONTRACTS, 2);
-    assert.equal(ORB_ENTRY_SIZING.maxContracts, 2);
+  it('hard-caps ORB at 3 contracts even when max-affordable would allow more', () => {
+    assert.equal(ORB_MAX_ENTRY_CONTRACTS, 3);
+    assert.equal(ORB_ENTRY_SIZING.maxContracts, 3);
     assert.equal(ORB_ENTRY_SIZING.feePerContract, OPTION_OPENING_COMMISSION_PER_CONTRACT);
 
-    // $500 / $35 = 14 max-affordable; ORB must still size 2.
+    // $500 / $35 = 14 max-affordable; ORB must still size 3.
     const orb = ladderPositionSize(500, 0.34, ORB_ENTRY_SIZING);
     assert.equal(orb.affordable, true);
-    assert.equal(orb.quantity, 2);
-    assert.equal(orb.entryContracts, 2);
-    assert.equal(orb.totalCost, 70);
+    assert.equal(orb.quantity, 3);
+    assert.equal(orb.entryContracts, 3);
+    assert.equal(orb.totalCost, 105);
+    // Capital below 3 contracts sizes only what it can pay for.
+    assert.equal(ladderPositionSize(70, 0.34, ORB_ENTRY_SIZING).quantity, 2);
+    assert.equal(ladderPositionSize(35, 0.34, ORB_ENTRY_SIZING).quantity, 1);
 
     const premarket = ladderPositionSize(500, 0.34, PREMARKET_ENTRY_SIZING);
-    assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 2);
-    assert.equal(PREMARKET_ENTRY_SIZING.maxContracts, 2);
-    assert.equal(premarket.quantity, 2);
+    assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 3);
+    assert.equal(PREMARKET_ENTRY_SIZING.maxContracts, 3);
+    assert.equal(premarket.quantity, 3);
 
     const ema = ladderPositionSize(500, 0.34, EMA_VWAP_ENTRY_SIZING);
-    assert.equal(ema.quantity, 2);
-    assert.equal(EMA_VWAP_ENTRY_SIZING.maxContracts, 2);
+    assert.equal(ema.quantity, 3);
+    assert.equal(EMA_VWAP_ENTRY_SIZING.maxContracts, 3);
     assert.equal(ORB_PREMARKET_ENTRY_SIZING.maxContracts, Infinity);
   });
 
@@ -131,7 +134,7 @@ describe('ORB production entry/sizing constants', () => {
     assert.match(orbExec, /ORB_ENTRIES_DISABLED_REASON/);
   });
 
-  it('wires the 2-contract override in orb, premarket, and emaVwap executors', () => {
+  it('wires the 3-contract override in orb, premarket, and emaVwap executors', () => {
     const orbExec = readFileSync(join(here, 'orbExecutor.js'), 'utf8');
     const pmExec = readFileSync(join(here, '../premarketBreakout/premarketExecutor.js'), 'utf8');
     const emaExec = readFileSync(join(here, '../emaVwapCross/emaVwapExecutor.js'), 'utf8');

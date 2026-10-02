@@ -63,12 +63,12 @@ describe('Premarket dynamic floor sizing', () => {
     assert.equal(3 * cost, 105);
   });
 
-  it('hard-caps production Premarket at 2 contracts when PREMARKET_ENTRY_SIZING is used', () => {
+  it('hard-caps production Premarket at 3 contracts when PREMARKET_ENTRY_SIZING is used', () => {
     const sizing = ladderPositionSize(500, 0.34, PREMARKET_ENTRY_SIZING);
-    assert.equal(PREMARKET_ENTRY_SIZING.maxContracts, 2);
+    assert.equal(PREMARKET_ENTRY_SIZING.maxContracts, 3);
     assert.equal(sizing.affordable, true);
-    assert.equal(sizing.quantity, 2);
-    assert.equal(sizing.entryContracts, 2);
-    assert.equal(sizing.totalCost, 70);
+    assert.equal(sizing.quantity, 3);
+    assert.equal(sizing.entryContracts, 3);
+    assert.equal(sizing.totalCost, 105);
   });
 });

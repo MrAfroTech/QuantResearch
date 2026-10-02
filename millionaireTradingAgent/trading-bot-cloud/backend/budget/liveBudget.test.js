@@ -42,15 +42,15 @@ describe('cross-strategy live FCFS shared pool', () => {
       perTradeCapFrac: livePerTradeCapFracFor('emavwap'),
     });
 
-    // Tradable pool = 75% of 140 = 105; remaining = 105 - 40 = 65; 80% per-trade cap → 52.
+    // Tradable pool = 75% of 140 = 105; remaining = 105 - 40 = 65; 100% per-trade cap → 65.
     assert.equal(computeLiveSharedRemaining(cash, 40), 65);
-    assert.equal(LIVE_PER_TRADE_CAP_FRAC, 0.8);
-    assert.equal(livePerTradeCapFracFor('orb'), 0.8);
-    assert.equal(livePerTradeCapFracFor('premarket'), 0.8);
-    assert.equal(livePerTradeCapFracFor('emavwap'), 0.8);
-    assert.equal(orbRemaining, 52);
-    assert.equal(premarketRemaining, 52);
-    assert.equal(emaRemaining, 52);
+    assert.equal(LIVE_PER_TRADE_CAP_FRAC, 1);
+    assert.equal(livePerTradeCapFracFor('orb'), 1);
+    assert.equal(livePerTradeCapFracFor('premarket'), 1);
+    assert.equal(livePerTradeCapFracFor('emavwap'), 1);
+    assert.equal(orbRemaining, 65);
+    assert.equal(premarketRemaining, 65);
+    assert.equal(emaRemaining, 65);
     assert.notEqual(orbRemaining, 50);
     assert.notEqual(orbRemaining, 140);
   });
@@ -58,8 +58,8 @@ describe('cross-strategy live FCFS shared pool', () => {
   it('clamps a large signal via per-trade cap before ladder sizing', () => {
     const sharedRemaining = 140;
     const capped = applyLivePerTradeCap(sharedRemaining);
-    assert.equal(LIVE_PER_TRADE_CAP_FRAC, 0.8);
-    assert.equal(capped, 112);
+    assert.equal(LIVE_PER_TRADE_CAP_FRAC, 1);
+    assert.equal(capped, 140);
 
     const bigCash = 10_000;
     const sizingBudget = resolveLiveSizingBudget({
@@ -69,8 +69,8 @@ describe('cross-strategy live FCFS shared pool', () => {
       requestingStrategy: 'orb',
       perTradeCapFrac: livePerTradeCapFracFor('orb'),
     });
-    // 75% of 10000 = 7500 tradable; 80% per-trade cap → 6000
-    assert.equal(sizingBudget, 6000);
+    // 75% of 10000 = 7500 tradable; 100% per-trade cap → 7500
+    assert.equal(sizingBudget, 7500);
     assert.equal(computeLiveSharedRemaining(bigCash, 0), 7500);
     assert.equal(computeLiveSharedRemaining(bigCash, 7500), 0);
     assert.ok(sizingBudget < bigCash);

@@ -69,20 +69,20 @@ export const DAILY_PROFIT_HALT_REASON = 'daily_profit_halt';
 
 /**
  * Live ORB per-trade cap as a fraction of shared live remaining.
- * Kept in sync with LIVE_PER_TRADE_CAP_FRAC (account-wide 80% for live 0DTE).
+ * Kept in sync with LIVE_PER_TRADE_CAP_FRAC (account-wide 100% for live 0DTE).
  */
 export const ORB_LIVE_PER_TRADE_CAP_FRAC = LIVE_PER_TRADE_CAP_FRAC;
 
 /**
- * ORB-only hard entry-size cap. Overrides max-affordable under the 80% live
- * per-trade cap. Premarket and EMA/VWAP are separately 2-capped; Swing is unaffected.
+ * ORB-only hard entry-size cap. Overrides max-affordable under the live
+ * per-trade cap. Premarket and EMA/VWAP are separately 3-capped; Swing is unaffected.
  *
  * Wired at: orbExecutor.positionSize → ladderPositionSize(..., ORB_ENTRY_SIZING)
  *
  * To restore max-affordable for ORB: set ORB_MAX_ENTRY_CONTRACTS = Infinity
  * (same as ORB_PREMARKET_ENTRY_SIZING).
  */
-export const ORB_MAX_ENTRY_CONTRACTS = 2;
+export const ORB_MAX_ENTRY_CONTRACTS = 3;
 
 /**
  * ORB order attempts. False blocks live and paper entries; scan/FSM still updates.
@@ -91,7 +91,7 @@ export const ORB_MAX_ENTRY_CONTRACTS = 2;
 export const ORB_ENTRIES_ENABLED = true;
 export const ORB_ENTRIES_DISABLED_REASON = 'orb_entries_disabled';
 
-/** ORB entry sizing — 2-contract hard cap + $1 opening commission. */
+/** ORB entry sizing — 3-contract hard cap + $1 opening commission. */
 export const ORB_ENTRY_SIZING = Object.freeze({
   maxContracts: ORB_MAX_ENTRY_CONTRACTS,
   feePerContract: OPTION_OPENING_COMMISSION_PER_CONTRACT,

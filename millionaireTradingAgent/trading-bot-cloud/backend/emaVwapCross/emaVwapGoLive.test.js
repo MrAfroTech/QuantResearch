@@ -24,17 +24,17 @@ describe('EMA/VWAP go-live prerequisites', () => {
     assert.equal(EMA_VWAP_HARD_STOP_PCT, 0.085);
   });
 
-  it('hard-caps EMA/VWAP at 2 contracts even when max-affordable would allow more', () => {
-    assert.equal(EMA_VWAP_MAX_ENTRY_CONTRACTS, 2);
-    assert.equal(EMA_VWAP_ENTRY_SIZING.maxContracts, 2);
+  it('hard-caps EMA/VWAP at 3 contracts even when max-affordable would allow more', () => {
+    assert.equal(EMA_VWAP_MAX_ENTRY_CONTRACTS, 3);
+    assert.equal(EMA_VWAP_ENTRY_SIZING.maxContracts, 3);
     assert.equal(EMA_VWAP_ENTRY_SIZING.feePerContract, OPTION_OPENING_COMMISSION_PER_CONTRACT);
     assert.notDeepEqual(EMA_VWAP_ENTRY_SIZING, ORB_PREMARKET_ENTRY_SIZING);
     const sizing = ladderPositionSize(500, 0.4, EMA_VWAP_ENTRY_SIZING);
-    assert.equal(sizing.quantity, 2);
+    assert.equal(sizing.quantity, 3);
     assert.equal(sizing.affordable, true);
-    assert.equal(sizing.totalCost, 82);
+    assert.equal(sizing.totalCost, 123);
     const premarket = ladderPositionSize(500, 0.4, PREMARKET_ENTRY_SIZING);
-    assert.equal(premarket.quantity, 2);
+    assert.equal(premarket.quantity, 3);
     assert.ok(ladderPositionSize(500, 0.4, ORB_PREMARKET_ENTRY_SIZING).quantity > 2);
   });
 

@@ -2,7 +2,7 @@
  * Target contracts per ladder entry (Swing).
  * Cap at 3 so 20/40/60% ladder rungs can actually scale out; 1-contract entries
  * collapse the schedule to a single rung. Buy min(3, affordable); never exceed 3.
- * Premarket, ORB, and EMA/VWAP are separately hard-capped at 2 contracts in their configs.
+ * Premarket, ORB, and EMA/VWAP are separately hard-capped at 3 contracts in their configs.
  */
 export const LADDER_TARGET_CONTRACTS = 3;
 
