@@ -95,26 +95,26 @@ describe('ORB production entry/sizing constants', () => {
     assert.equal(ORB_PARTIAL_LOCK_ACTIVATION_MFE, 0.03);
   });
 
-  it('hard-caps ORB at 1 contract even when max-affordable would allow more', () => {
-    assert.equal(ORB_MAX_ENTRY_CONTRACTS, 1);
-    assert.equal(ORB_ENTRY_SIZING.maxContracts, 1);
+  it('hard-caps ORB at 2 contracts even when max-affordable would allow more', () => {
+    assert.equal(ORB_MAX_ENTRY_CONTRACTS, 2);
+    assert.equal(ORB_ENTRY_SIZING.maxContracts, 2);
     assert.equal(ORB_ENTRY_SIZING.feePerContract, OPTION_OPENING_COMMISSION_PER_CONTRACT);
 
-    // $500 / $35 = 14 max-affordable; ORB must still size 1.
+    // $500 / $35 = 14 max-affordable; ORB must still size 2.
     const orb = ladderPositionSize(500, 0.34, ORB_ENTRY_SIZING);
     assert.equal(orb.affordable, true);
-    assert.equal(orb.quantity, 1);
-    assert.equal(orb.entryContracts, 1);
-    assert.equal(orb.totalCost, 35);
+    assert.equal(orb.quantity, 2);
+    assert.equal(orb.entryContracts, 2);
+    assert.equal(orb.totalCost, 70);
 
     const premarket = ladderPositionSize(500, 0.34, PREMARKET_ENTRY_SIZING);
-    assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 1);
-    assert.equal(PREMARKET_ENTRY_SIZING.maxContracts, 1);
-    assert.equal(premarket.quantity, 1);
+    assert.equal(PREMARKET_MAX_ENTRY_CONTRACTS, 2);
+    assert.equal(PREMARKET_ENTRY_SIZING.maxContracts, 2);
+    assert.equal(premarket.quantity, 2);
 
     const ema = ladderPositionSize(500, 0.34, EMA_VWAP_ENTRY_SIZING);
-    assert.equal(ema.quantity, 1);
-    assert.equal(EMA_VWAP_ENTRY_SIZING.maxContracts, 1);
+    assert.equal(ema.quantity, 2);
+    assert.equal(EMA_VWAP_ENTRY_SIZING.maxContracts, 2);
     assert.equal(ORB_PREMARKET_ENTRY_SIZING.maxContracts, Infinity);
   });
 
@@ -131,7 +131,7 @@ describe('ORB production entry/sizing constants', () => {
     assert.match(orbExec, /ORB_ENTRIES_DISABLED_REASON/);
   });
 
-  it('wires the 1-contract override in orb, premarket, and emaVwap executors', () => {
+  it('wires the 2-contract override in orb, premarket, and emaVwap executors', () => {
     const orbExec = readFileSync(join(here, 'orbExecutor.js'), 'utf8');
     const pmExec = readFileSync(join(here, '../premarketBreakout/premarketExecutor.js'), 'utf8');
     const emaExec = readFileSync(join(here, '../emaVwapCross/emaVwapExecutor.js'), 'utf8');

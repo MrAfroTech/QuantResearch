@@ -6,13 +6,10 @@ import { LIVE_PER_TRADE_CAP_FRAC } from '../budget/liveBudget.js';
 export const ORB_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
 
 export const ORB_BUDGET_MAX = 299.5;
-/** Paper concurrent open-position cap (unchanged). */
-export const ORB_MAX_POSITIONS = 3;
-/**
- * Live concurrent open-position cap — revisit as live balance grows ($60 now → ~$210 pending → more).
- * Kept separate so paper sizing/caps stay untouched.
- */
-export const LIVE_MAX_POSITIONS_ORB = 1;
+/** No concurrent open-position cap (paper). */
+export const ORB_MAX_POSITIONS = Infinity;
+/** No concurrent open-position cap (live). */
+export const LIVE_MAX_POSITIONS_ORB = Infinity;
 
 /** Resolve max open positions from strategy environment at decision time. */
 export function getOrbMaxPositions(environment) {
@@ -78,19 +75,14 @@ export const ORB_LIVE_PER_TRADE_CAP_FRAC = LIVE_PER_TRADE_CAP_FRAC;
 
 /**
  * ORB-only hard entry-size cap. Overrides max-affordable under the 80% live
- * per-trade cap. Premarket and EMA/VWAP are separately 1-capped; Swing is unaffected.
- *
- * REVERSIBLE OVERRIDE — 2026-09-18.
- * ORB is the worst-performing strategy (21.8% all-time win rate, negative ROI
- * across every window). Cap every ORB entry at 1 contract regardless of what
- * max-affordable would otherwise allow.
+ * per-trade cap. Premarket and EMA/VWAP are separately 2-capped; Swing is unaffected.
  *
  * Wired at: orbExecutor.positionSize → ladderPositionSize(..., ORB_ENTRY_SIZING)
  *
  * To restore max-affordable for ORB: set ORB_MAX_ENTRY_CONTRACTS = Infinity
  * (same as ORB_PREMARKET_ENTRY_SIZING).
  */
-export const ORB_MAX_ENTRY_CONTRACTS = 1;
+export const ORB_MAX_ENTRY_CONTRACTS = 2;
 
 /**
  * ORB order attempts. False blocks live and paper entries; scan/FSM still updates.
@@ -99,7 +91,7 @@ export const ORB_MAX_ENTRY_CONTRACTS = 1;
 export const ORB_ENTRIES_ENABLED = true;
 export const ORB_ENTRIES_DISABLED_REASON = 'orb_entries_disabled';
 
-/** ORB entry sizing — 1-contract hard cap + $1 opening commission. */
+/** ORB entry sizing — 2-contract hard cap + $1 opening commission. */
 export const ORB_ENTRY_SIZING = Object.freeze({
   maxContracts: ORB_MAX_ENTRY_CONTRACTS,
   feePerContract: OPTION_OPENING_COMMISSION_PER_CONTRACT,

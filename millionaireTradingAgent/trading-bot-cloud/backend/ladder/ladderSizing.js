@@ -37,9 +37,9 @@ export function maxAffordableContracts(budgetAvailable, premium, feePerContract 
  * Ladder entry sizing.
  *
  * Default (Swing): cap at LADDER_TARGET_CONTRACTS.
- * EMA/VWAP: pass EMA_VWAP_ENTRY_SIZING from emaVwapConfig.js (hard 1-contract cap).
- * Premarket: pass PREMARKET_ENTRY_SIZING from premarketConfig.js (hard 1-contract cap).
- * ORB: pass ORB_ENTRY_SIZING from orbConfig.js (hard 1-contract cap override).
+ * EMA/VWAP: pass EMA_VWAP_ENTRY_SIZING from emaVwapConfig.js (hard 2-contract cap).
+ * Premarket: pass PREMARKET_ENTRY_SIZING from premarketConfig.js (hard 2-contract cap).
+ * ORB: pass ORB_ENTRY_SIZING from orbConfig.js (hard 2-contract cap override).
  *
  * Skip (quantity 0) when even 1 contract is unaffordable — do not enter.
  *
@@ -103,7 +103,7 @@ export function ladderPositionSize(budgetAvailable, premium, options = {}) {
 /**
  * Uncapped max-affordable helper (opening commission included).
  * Production Premarket no longer uses this — see PREMARKET_ENTRY_SIZING
- * in premarketConfig.js (hard 1-contract cap, reversible).
+ * in premarketConfig.js (hard 2-contract cap).
  */
 export const ORB_PREMARKET_ENTRY_SIZING = Object.freeze({
   maxContracts: Infinity,

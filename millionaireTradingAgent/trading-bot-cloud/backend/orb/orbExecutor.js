@@ -180,9 +180,7 @@ function positionSize(budgetRemaining, openCount, premium, maxPositions) {
   // FCFS: size against full remaining budget (not remaining ÷ open slots).
   // Tradeoff: first signal can consume most/all remaining budget.
   //
-  // ORB_ENTRY_SIZING is the 1-contract hard cap (see orbConfig.js). This is
-  // the only strategy that overrides max-affordable; Premarket still uses
-  // maxContracts: Infinity.
+  // ORB_ENTRY_SIZING is the 2-contract hard cap (see orbConfig.js).
   return {
     ...ladderPositionSize(budgetRemaining, premium, ORB_ENTRY_SIZING),
     perSlot: budgetRemaining,

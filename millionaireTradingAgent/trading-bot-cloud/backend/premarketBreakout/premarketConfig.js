@@ -5,13 +5,10 @@ import { OPTION_OPENING_COMMISSION_PER_CONTRACT } from '../ladder/ladderConfig.j
 export const PREMARKET_SYMBOLS = ['SPY', 'QQQ', 'IWM'];
 
 export const PREMARKET_BUDGET_MAX = 898.5;
-/** Paper concurrent open-position cap (unchanged). */
-export const PREMARKET_MAX_POSITIONS = 3;
-/**
- * Live concurrent open-position cap — revisit as live balance grows ($60 now → ~$210 pending → more).
- * Kept separate so paper sizing/caps stay untouched.
- */
-export const LIVE_MAX_POSITIONS_PREMARKET = 1;
+/** No concurrent open-position cap (paper). */
+export const PREMARKET_MAX_POSITIONS = Infinity;
+/** No concurrent open-position cap (live). */
+export const LIVE_MAX_POSITIONS_PREMARKET = Infinity;
 
 /** Resolve max open positions from strategy environment at decision time. */
 export function getPremarketMaxPositions(environment) {
@@ -22,17 +19,16 @@ export function getPremarketMaxPositions(environment) {
 
 /**
  * Premarket-only hard entry-size cap. Overrides max-affordable under the live
- * per-trade cap. ORB and EMA/VWAP are separately 1-capped.
+ * per-trade cap. ORB and EMA/VWAP are separately 2-capped.
  *
- * REVERSIBLE OVERRIDE — 2026-09-22.
  * Wired at: premarketExecutor.positionSize → ladderPositionSize(..., PREMARKET_ENTRY_SIZING)
  *
  * To restore max-affordable for Premarket: set PREMARKET_MAX_ENTRY_CONTRACTS = Infinity
  * (same as ORB_PREMARKET_ENTRY_SIZING).
  */
-export const PREMARKET_MAX_ENTRY_CONTRACTS = 1;
+export const PREMARKET_MAX_ENTRY_CONTRACTS = 2;
 
-/** Premarket entry sizing — 1-contract hard cap + $1 opening commission. */
+/** Premarket entry sizing — 2-contract hard cap + $1 opening commission. */
 export const PREMARKET_ENTRY_SIZING = Object.freeze({
   maxContracts: PREMARKET_MAX_ENTRY_CONTRACTS,
   feePerContract: OPTION_OPENING_COMMISSION_PER_CONTRACT,

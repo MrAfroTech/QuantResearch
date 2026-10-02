@@ -7,12 +7,12 @@ const LIVE_STRATEGY_KEYS = ['swing', 'orb', 'premarket', 'emavwap'];
  * Shared across live strategies — not an equal split of the full account,
  * and not 100% of cash.
  */
-export const LIVE_BUDGET_MAX_FRAC = 0.5;
+export const LIVE_BUDGET_MAX_FRAC = 0.75;
 
 /**
  * Per-trade cap as a fraction of shared live remaining at sizing time.
  * Account-wide for live 0DTE strategies (ORB / Premarket / EMA-VWAP): 80%
- * of the remaining tradable pool (50% of account cash minus already deployed).
+ * of the remaining tradable pool (75% of account cash minus already deployed).
  */
 export const LIVE_PER_TRADE_CAP_FRAC = 0.8;
 
@@ -23,7 +23,7 @@ export const LIVE_PER_TRADE_CAP_FRAC_BY_STRATEGY = Object.freeze({
   emavwap: LIVE_PER_TRADE_CAP_FRAC,
 });
 
-/** Max dollars the bot may show / draw: 50% of available account cash. */
+/** Max dollars the bot may show / draw: 75% of available account cash. */
 export function computeLiveBudgetMax(cashBalance) {
   const cash = Number(cashBalance);
   if (!Number.isFinite(cash) || cash <= 0) return 0;
@@ -46,7 +46,7 @@ let cache = {
 };
 
 /**
- * Live allocation max: 50% of cash, shared by every live strategy (not cash÷n,
+ * Live allocation max: 75% of cash, shared by every live strategy (not cash÷n,
  * and not the full account). Prefer computeLiveBudgetMax; this keeps the old
  * signature for callers that still pass a strategy count.
  */
@@ -55,7 +55,7 @@ export function computeLivePerStrategyBudget(cashBalance, liveStrategyCount) {
   return computeLiveBudgetMax(cashBalance);
 }
 
-/** Shared live pool remaining: 50% of account cash − Σ(deployed across live strategies). */
+/** Shared live pool remaining: 75% of account cash − Σ(deployed across live strategies). */
 export function computeLiveSharedRemaining(cashBalance, deployedAcrossLive) {
   const cash = Number(cashBalance);
   const deployed = Number(deployedAcrossLive) || 0;
@@ -78,7 +78,7 @@ export function applyLivePerTradeCap(sharedRemaining, capFrac = LIVE_PER_TRADE_C
 
 /**
  * Pure live sizing budget for a requesting strategy.
- * Cross-strategy FCFS: 50% of account cash − all live deployed, then per-trade cap.
+ * Cross-strategy FCFS: 75% of account cash − all live deployed, then per-trade cap.
  */
 export function resolveLiveSizingBudget({
   cashBalance,
@@ -142,7 +142,7 @@ export function getLiveBudgetCacheMeta() {
   };
 }
 
-/** Live strategy max: 50% of account cash (not cash÷n, not 100% of cash). */
+/** Live strategy max: 75% of account cash (not cash÷n, not 100% of cash). */
 export async function getLiveBudgetTotal(strategy) {
   const liveStrategies = await getLiveStrategyKeys();
   if (!liveStrategies.includes(strategy)) {

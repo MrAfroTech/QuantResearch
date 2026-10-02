@@ -22,8 +22,8 @@ export function emaVwapEntrySizingBudget(budgetRemaining, premium, feePerContrac
   const cost = Number.isFinite(oneContract) && oneContract > 0 ? oneContract : 0;
   return Math.max(safeRemaining, cost);
 }
-/** Spec: max 2 concurrent open positions (was 3 — drift from documented design). */
-export const EMA_VWAP_MAX_POSITIONS = 2;
+/** No concurrent open-position cap. Correlation block is separate. */
+export const EMA_VWAP_MAX_POSITIONS = Infinity;
 
 /**
  * SPY / QQQ / IWM treated as one correlation group for same-direction concurrency.
@@ -63,18 +63,17 @@ export const EMA_VWAP_STOP_LOSS_PCT = 0.0575;
 export const EMA_VWAP_HARD_STOP_PCT = 0.085;
 
 /**
- * EMA/VWAP-only hard entry-size cap. Overrides max-affordable under the 70% live
- * per-trade cap. Premarket, ORB, and EMA/VWAP are each 1-capped; Swing is unaffected.
+ * EMA/VWAP-only hard entry-size cap. Overrides max-affordable under the live
+ * per-trade cap. Premarket, ORB, and EMA/VWAP are each 2-capped; Swing is unaffected.
  *
- * REVERSIBLE OVERRIDE — 2026-09-21.
  * Wired at: emaVwapExecutor.positionSize → ladderPositionSize(..., EMA_VWAP_ENTRY_SIZING)
  *
  * To restore max-affordable for EMA/VWAP: set EMA_VWAP_MAX_ENTRY_CONTRACTS = Infinity
  * (same as ORB_PREMARKET_ENTRY_SIZING).
  */
-export const EMA_VWAP_MAX_ENTRY_CONTRACTS = 1;
+export const EMA_VWAP_MAX_ENTRY_CONTRACTS = 2;
 
-/** EMA/VWAP entry sizing — 1-contract hard cap + $1 opening commission. */
+/** EMA/VWAP entry sizing — 2-contract hard cap + $1 opening commission. */
 export const EMA_VWAP_ENTRY_SIZING = Object.freeze({
   maxContracts: EMA_VWAP_MAX_ENTRY_CONTRACTS,
   feePerContract: OPTION_OPENING_COMMISSION_PER_CONTRACT,

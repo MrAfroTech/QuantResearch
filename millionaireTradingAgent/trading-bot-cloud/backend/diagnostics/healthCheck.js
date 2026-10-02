@@ -148,10 +148,11 @@ function buildBudget(cap, spent) {
 
 function buildPositionBlock(openPositions, maxPositions) {
   const openCount = openPositions.length;
+  const capped = Number.isFinite(maxPositions);
   return {
     open_count: openCount,
-    max: maxPositions,
-    at_limit: openCount >= maxPositions,
+    max: capped ? maxPositions : null,
+    at_limit: capped && openCount >= maxPositions,
     open: openPositions,
   };
 }

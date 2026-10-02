@@ -19,20 +19,20 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-// Live allocation max is 50% of account cash, shared across live strategies.
+// Live allocation max is 75% of account cash, shared across live strategies.
 const onlyPremarket = computeLivePerStrategyBudget(10_000, 1);
-assert(onlyPremarket === 5_000, 'live max: single strategy is 50% of cash');
+assert(onlyPremarket === 7_500, 'live max: single strategy is 75% of cash');
 
 const bothLive = computeLivePerStrategyBudget(10_000, 2);
-assert(bothLive === 5_000, 'live max: two strategies share one 50% pool');
+assert(bothLive === 7_500, 'live max: two strategies share one 75% pool');
 
 // Live FCFS shared pool + provisional per-trade cap
 const shared = computeLiveSharedRemaining(140, 40);
-assert(shared === 30, 'shared remaining = 50% of cash − all live deployed');
+assert(shared === 65, 'shared remaining = 75% of cash − all live deployed');
 
 const capped = applyLivePerTradeCap(shared);
 assert(LIVE_PER_TRADE_CAP_FRAC === 0.8, 'account-wide live per-trade cap is 80%');
-assert(capped === 24, 'default per-trade cap clamps to 80% of shared remaining');
+assert(capped === 52, 'default per-trade cap clamps to 80% of shared remaining');
 assert(ORB_LIVE_PER_TRADE_CAP_FRAC === 0.8, 'ORB live per-trade cap is 80%');
 assert(livePerTradeCapFracFor('orb') === 0.8, 'livePerTradeCapFracFor(orb) is 80%');
 assert(livePerTradeCapFracFor('premarket') === 0.8, 'Premarket live per-trade cap is 80%');
@@ -45,7 +45,7 @@ const orbSizing = resolveLiveSizingBudget({
   requestingStrategy: 'orb',
   perTradeCapFrac: livePerTradeCapFracFor('orb'),
 });
-assert(orbSizing === 24, 'ORB live remaining reflects Premarket deployed + 80% cap');
+assert(orbSizing === 52, 'ORB live remaining reflects Premarket deployed + 80% cap');
 assert(orbSizing !== 50, 'must not return stale equal-split (140/2)');
 
 const premarketSizing = resolveLiveSizingBudget({
@@ -55,7 +55,7 @@ const premarketSizing = resolveLiveSizingBudget({
   requestingStrategy: 'premarket',
   perTradeCapFrac: livePerTradeCapFracFor('premarket'),
 });
-assert(premarketSizing === 24, 'Premarket uses 80% per-trade cap of the 50% pool');
+assert(premarketSizing === 52, 'Premarket uses 80% per-trade cap of the 75% pool');
 
 const dailyPnl = computeDailyPnl({ realizedToday: -500, unrealizedOpen: -400 });
 assert(dailyPnl === -900, 'daily P&L should sum realized and unrealized');
