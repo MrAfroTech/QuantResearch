@@ -60,6 +60,10 @@ import {
   getPostRangeBars,
 } from './orbRangeState.js';
 import { evaluateOrbSignals, persistInvalidationEvents } from './orbSignalEngine.js';
+import {
+  ORB_LEVEL_SPENT_AFTER_LOSS_REASON,
+  evaluateOrbLevelSpentAfterLoss,
+} from './orbLevelSpentAfterLoss.js';
 import { persistUnderlyingBarsInBackground } from '../marketData/persistUnderlyingBars.js';
 import {
   filterCompletedBars,
@@ -287,6 +291,30 @@ async function tryExecuteEntry(entry) {
       reason: 'Same-day loss block — no re-entry after a losing close today',
     });
     return { executed: false, reason: 'same_day_loss_block' };
+  }
+
+  const levelSpent = evaluateOrbLevelSpentAfterLoss(
+    await listOrbBreakoutCloseOutcomes({ ticker: entry.symbol, tradeDate: etDateKey() }),
+    { direction: entry.direction, breakoutLevel: entry.breakout_level }
+  );
+  if (levelSpent.blocked) {
+    console.log(
+      `[ORB] ${ORB_LEVEL_SPENT_AFTER_LOSS_REASON} — skipping ${entry.symbol} ${entry.direction}` +
+        ` level=${entry.breakout_level} priorLoss=$${levelSpent.realizedPnl}`
+    );
+    await sendOrbSignalNotExecutedTelegram({
+      ticker: entry.symbol,
+      direction: entry.direction,
+      reason:
+        `Opening-range level spent — a losing close already filled ${entry.symbol} ${entry.direction}` +
+        ` at ${entry.breakout_level} today`,
+    });
+    return {
+      executed: false,
+      reason: ORB_LEVEL_SPENT_AFTER_LOSS_REASON,
+      realizedPnl: levelSpent.realizedPnl,
+      closedAt: levelSpent.closedAt,
+    };
   }
 
   const collision = await getOrbPremarketLevelCollisionGate({
