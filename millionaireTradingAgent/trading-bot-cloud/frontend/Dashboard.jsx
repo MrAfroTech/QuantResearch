@@ -270,6 +270,8 @@ export default function Dashboard() {
   const [togglingOrb, setTogglingOrb] = useState(false);
   const [togglingPremarket, setTogglingPremarket] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(null);
+  const [eventLog, setEventLog] = useState([]);
+  const [eventLogLoading, setEventLogLoading] = useState(true);
 
   const fetchStatus = useCallback(async () => {
     if (!API_BASE) {
@@ -295,11 +297,33 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchEventLog = useCallback(async () => {
+    if (!API_BASE) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/event-log?limit=50`, { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setEventLog(data.events || []);
+    } catch (err) {
+      console.error('Event log fetch error:', err.message);
+    } finally {
+      setEventLogLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchStatus();
+    fetchEventLog();
     const interval = setInterval(fetchStatus, 15000);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
+    const eventInterval = setInterval(fetchEventLog, 30000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(eventInterval);
+    };
+  }, [fetchStatus, fetchEventLog]);
 
   async function toggleStrategyMode(strategy) {
     if (!status || !API_BASE || status.dashboard_controls_enabled !== true) return;
@@ -764,6 +788,92 @@ export default function Dashboard() {
               </p>
             )}
           </>
+        )}
+      </section>
+
+      {/* Section 9 — Breakout Event Log */}
+      <section style={{ ...cardStyle, marginTop: 16 }}>
+        <h2 style={sectionTitleStyle}>Breakout Event Log</h2>
+        {eventLogLoading ? (
+          <p style={{ color: '#666', margin: 0 }}>Loading event log...</p>
+        ) : !eventLog.length ? (
+          <p style={{ color: '#666', margin: 0 }}>No events recorded</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Time</th>
+                  <th style={thStyle}>Strategy</th>
+                  <th style={thStyle}>Ticker</th>
+                  <th style={thStyle}>Event Type</th>
+                  <th style={thStyle}>Direction</th>
+                  <th style={thStyle}>Entry Policy</th>
+                </tr>
+              </thead>
+              <tbody>
+                {eventLog.map((event, idx) => (
+                  <tr key={`${event.strategy}-${event.ticker}-${event.created_at}-${idx}`}>
+                    <td style={tdStyle}>{formatTime(event.created_at)}</td>
+                    <td style={tdStyle}><StrategyBadge strategy={event.strategy} /></td>
+                    <td style={tdStyle}>{event.ticker}</td>
+                    <td style={tdStyle}>
+                      {event.event_type === 'entry_policy_assigned' && event.entry_policy ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span>entry policy assigned</span>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              letterSpacing: '0.04em',
+                              background: event.entry_policy === 'bar0' ? '#dbeafe' : '#fef3c7',
+                              color: event.entry_policy === 'bar0' ? '#1e40af' : '#92400e',
+                              border: event.entry_policy === 'bar0' ? '1px solid #93c5fd' : '1px solid #fcd34d',
+                            }}
+                          >
+                            {event.entry_policy}
+                          </span>
+                        </div>
+                      ) : (
+                        event.event_type
+                      )}
+                    </td>
+                    <td style={{
+                      ...tdStyle,
+                      color: event.direction === 'CALL' ? '#16a34a' : event.direction === 'PUT' ? '#dc2626' : undefined,
+                      fontWeight: event.direction ? 600 : undefined,
+                    }}>
+                      {event.direction || '—'}
+                    </td>
+                    <td style={tdStyle}>
+                      {event.event_type === 'entry_policy_assigned' && event.entry_policy ? (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: '0.04em',
+                            background: event.entry_policy === 'bar0' ? '#dbeafe' : '#fef3c7',
+                            color: event.entry_policy === 'bar0' ? '#1e40af' : '#92400e',
+                            border: event.entry_policy === 'bar0' ? '1px solid #93c5fd' : '1px solid #fcd34d',
+                          }}
+                        >
+                          {event.entry_policy}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </div>

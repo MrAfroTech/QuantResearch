@@ -84,6 +84,19 @@ export async function ensureEmaVwapSchema() {
       )
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS emavwap_event_log (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        ticker TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        direction TEXT,
+        breakout_level DOUBLE PRECISION,
+        details_json TEXT,
+        created_at TEXT NOT NULL
+      )
+    `;
+
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS exit_phase TEXT DEFAULT 'INITIAL'`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS contracts_open INTEGER`;
     await sql`ALTER TABLE emavwap_positions ADD COLUMN IF NOT EXISTS trail_peak_pnl_frac DOUBLE PRECISION NOT NULL DEFAULT 0`;
