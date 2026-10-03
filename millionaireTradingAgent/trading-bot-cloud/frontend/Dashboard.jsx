@@ -83,6 +83,15 @@ function TickerWinRateCell({ stats }) {
 }
 
 const ET_TZ = 'America/New_York';
+const DATE_TEXT = '#111111';
+const LIVE_UNDERLYINGS = ['IWM', 'SPY', 'QQQ'];
+const POSITION_EVENT_TYPES = new Set([
+  'mfe_advance',
+  'partial_lock_stop_replace',
+  'partial_lock_stop_replace_failed',
+  'partial_lock_trail',
+  'hard_stop_slippage',
+]);
 
 /** Parse API/DB timestamps (ISO or Postgres-style) for display only. */
 function parseTimestamp(value) {
@@ -127,6 +136,75 @@ function formatDateTimeEt(iso) {
     hour12: true,
     timeZoneName: 'short',
   });
+}
+
+function etDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  const year = Number(get('year'));
+  const month = Number(get('month'));
+  const day = Number(get('day'));
+  return {
+    year,
+    month,
+    day,
+    key: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+  };
+}
+
+function etDateKeyFromValue(value) {
+  const d = parseTimestamp(value);
+  if (!d) return null;
+  return etDateParts(d).key;
+}
+
+function shiftMonth(year, month, delta) {
+  const next = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1 };
+}
+
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function mondayIndex(year, month, day) {
+  return (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7;
+}
+
+function calendarShade(dollars) {
+  const n = Number(dollars);
+  if (!Number.isFinite(n) || n === 0) return 'flat';
+  return n > 0 ? 'up' : 'down';
+}
+
+function formatCompactDollars(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return '$0';
+  const sign = n > 0 ? '+' : '-';
+  const abs = Math.abs(n);
+  const body = abs >= 100
+    ? abs.toLocaleString('en-US', { maximumFractionDigits: 0 })
+    : abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${sign}$${body}`;
+}
+
+function currentScanLabel(range) {
+  if (!range || (range.phase == null && range.high == null && range.low == null)) {
+    return 'No scan state recorded';
+  }
+  if (range.phase === 'watching' && !range.direction && range.breakout_level == null) {
+    return 'Scanned — no breakout';
+  }
+  if (range.phase === 'awaiting_confirmation') {
+    return 'Breakout detected — awaiting confirmation — no trade';
+  }
+  if (range.phase) return String(range.phase);
+  return 'No scan state recorded';
 }
 
 function pnlColor(value) {
@@ -245,6 +323,203 @@ function ModeToggle({ label, mode, disabled, controlsDisabled, onToggle }) {
         {buttonLabel}
       </button>
     </div>
+  );
+}
+
+function DailyPnlCalendar({ dailyByKey }) {
+  const today = etDateParts();
+  const [cursor, setCursor] = useState({ year: today.year, month: today.month });
+  const days = daysInMonth(cursor.year, cursor.month);
+  const lead = mondayIndex(cursor.year, cursor.month, 1);
+  const cells = [];
+  for (let i = 0; i < lead; i += 1) cells.push({ key: `lead-${i}`, empty: true });
+  for (let day = 1; day <= days; day += 1) {
+    const key = `${cursor.year}-${String(cursor.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    cells.push({
+      key,
+      day,
+      today: key === today.key,
+      stats: dailyByKey?.[key] || null,
+    });
+  }
+  while (cells.length % 7 !== 0) cells.push({ key: `trail-${cells.length}`, empty: true });
+  const title = new Date(Date.UTC(cursor.year, cursor.month - 1, 1)).toLocaleString('en-US', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+
+  return (
+    <section style={{ ...cardStyle, marginBottom: 0, height: '100%', boxSizing: 'border-box' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: DATE_TEXT }}>Daily P&L</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{title}</span>
+          <button type="button" aria-label="Previous month" onClick={() => setCursor((c) => shiftMonth(c.year, c.month, -1))} style={calNavStyle}>‹</button>
+          <button type="button" aria-label="Next month" onClick={() => setCursor((c) => shiftMonth(c.year, c.month, 1))} style={calNavStyle}>›</button>
+        </div>
+      </div>
+      <div style={calWeekdayRow}>
+        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((label, i) => (
+          <div key={`${label}-${i}`} style={calWeekdayStyle}>{label}</div>
+        ))}
+      </div>
+      <div style={calGrid}>
+        {cells.map((cell) => {
+          if (cell.empty) return <div key={cell.key} style={{ ...calCellStyle, background: 'transparent', borderColor: 'transparent' }} />;
+          const dollars = cell.stats?.dollars;
+          const shade = cell.stats ? calendarShade(dollars) : 'flat';
+          const background = shade === 'up' ? '#bbf7d0' : shade === 'down' ? '#fecaca' : '#fff';
+          const amountColor = shade === 'up' ? '#166534' : shade === 'down' ? '#991b1b' : '#6b7280';
+          return (
+            <div
+              key={cell.key}
+              style={{
+                ...calCellStyle,
+                background,
+                border: cell.today ? '1px solid #2563eb' : '1px solid #e5e7eb',
+                boxShadow: cell.today ? 'inset 0 0 0 1px #93c5fd' : 'none',
+              }}
+            >
+              <div style={{ textAlign: 'left', fontSize: 12, fontWeight: 700, color: DATE_TEXT, lineHeight: 1.1 }}>
+                {cell.day}
+              </div>
+              {cell.stats && (
+                <div style={{ fontSize: 10, fontWeight: 700, color: amountColor, marginTop: 4, lineHeight: 1.2 }}>
+                  {formatCompactDollars(dollars)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function BreakoutLog({ status }) {
+  const ranges = status?.orb_status?.opening_ranges || {};
+  const sessionDate = status?.orb_status?.trade_date || null;
+  const events = (status?.breakout_event_log || []).filter(
+    (row) => !POSITION_EVENT_TYPES.has(String(row.event_type || ''))
+  );
+  const linkedTradeIds = new Set(
+    events.map((row) => row.trade_id).filter((id) => id != null).map((id) => String(id))
+  );
+  const trades = (status?.trade_log || []).filter((trade) => {
+    const ticker = String(trade.ticker || '').toUpperCase();
+    if (!LIVE_UNDERLYINGS.includes(ticker)) return false;
+    if (linkedTradeIds.has(String(trade.id))) return false;
+    return trade.strategy === 'orb' || trade.strategy === 'premarket' || trade.strategy === 'emavwap';
+  });
+
+  return (
+    <section style={{ ...cardStyle, marginTop: 16 }}>
+      <h2 style={sectionTitleStyle}>Breakout Log</h2>
+      <p style={{ color: '#6b7280', fontSize: 13, margin: '0 0 12px', maxWidth: 820 }}>
+        Current opening-range state for the live universe, plus recorded breakout and entry events from the last week.
+        A quiet scan that never leaves the range is not stored, so past “no breakout” rows are not listed.
+        Position-management events are left out of this table.
+      </p>
+      <h3 style={subheadStyle}>Current scan{sessionDate ? ` · ${sessionDate}` : ''}</h3>
+      <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Ticker</th>
+              <th style={thStyle}>Direction</th>
+              <th style={thStyle}>Breakout level</th>
+              <th style={thStyle}>Status</th>
+              <th style={thStyle}>Entry today</th>
+              <th style={thStyle}>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {LIVE_UNDERLYINGS.map((ticker) => {
+              const range = ranges[ticker] || null;
+              const todaysTrades = (status?.trade_log || []).filter((trade) => {
+                if (String(trade.ticker || '').toUpperCase() !== ticker) return false;
+                if (trade.strategy !== 'orb') return false;
+                return etDateKeyFromValue(trade.opened_at) === sessionDate;
+              });
+              const result = todaysTrades.map((trade) => {
+                const pct = formatPct(trade.pnl_pct);
+                return [trade.close_reason, pct !== '—' ? pct : null].filter(Boolean).join(' ');
+              }).filter(Boolean).join(' · ');
+              return (
+                <tr key={ticker}>
+                  <td style={tdStyle}>{ticker}</td>
+                  <td style={tdStyle}>{range?.direction || '—'}</td>
+                  <td style={tdStyle}>
+                    {range?.breakout_level != null ? formatCurrency(range.breakout_level) : '—'}
+                  </td>
+                  <td style={tdStyle}>{currentScanLabel(range)}</td>
+                  <td style={tdStyle}>{todaysTrades.length ? 'Yes' : 'No'}</td>
+                  <td style={tdStyle}>{result || '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <h3 style={subheadStyle}>Recorded events</h3>
+      {!events.length && !trades.length ? (
+        <p style={{ color: '#666', margin: 0 }}>No breakout or entry events in the current log.</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Time</th>
+                <th style={thStyle}>Ticker</th>
+                <th style={thStyle}>Strategy</th>
+                <th style={thStyle}>Direction</th>
+                <th style={thStyle}>Breakout level</th>
+                <th style={thStyle}>Status</th>
+                <th style={thStyle}>Entry taken</th>
+                <th style={thStyle}>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((row) => {
+                const resultBits = [
+                  row.close_reason,
+                  row.pnl_pct != null ? formatPct(row.pnl_pct) : null,
+                ].filter(Boolean);
+                return (
+                  <tr key={`${row.strategy}-${row.id}`}>
+                    <td style={tdStyle}>{formatDateTimeEt(row.created_at)}</td>
+                    <td style={tdStyle}>{row.ticker}</td>
+                    <td style={tdStyle}><StrategyBadge strategy={row.strategy} /></td>
+                    <td style={tdStyle}>{row.direction || '—'}</td>
+                    <td style={tdStyle}>
+                      {row.breakout_level != null ? formatCurrency(row.breakout_level) : '—'}
+                    </td>
+                    <td style={tdStyle}>{row.outcome_label || row.event_type || '—'}</td>
+                    <td style={tdStyle}>{row.outcome === 'filled' ? 'Yes' : 'No'}</td>
+                    <td style={tdStyle}>{resultBits.join(' ') || '—'}</td>
+                  </tr>
+                );
+              })}
+              {trades.map((trade) => (
+                <tr key={`trade-${trade.strategy}-${trade.id}`}>
+                  <td style={tdStyle}>{formatDateTimeEt(trade.opened_at || trade.closed_at)}</td>
+                  <td style={tdStyle}>{trade.ticker}</td>
+                  <td style={tdStyle}><StrategyBadge strategy={trade.strategy} /></td>
+                  <td style={tdStyle}>{trade.direction || '—'}</td>
+                  <td style={tdStyle}>—</td>
+                  <td style={tdStyle}>Trade</td>
+                  <td style={tdStyle}>Yes</td>
+                  <td style={tdStyle}>
+                    {[trade.close_reason, formatPct(trade.pnl_pct)].filter((part) => part && part !== '—').join(' ') || '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -390,6 +665,8 @@ export default function Dashboard() {
     <div>
       <p style={{ color: '#666', margin: '0 0 16px' }}>Tastytrade · Cloud · Tradier</p>
 
+      <div style={topGridStyle}>
+      <div style={{ minWidth: 0 }}>
       {/* Section 1 — Status Bar */}
       <div style={statusBarStyle}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -450,19 +727,21 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Tracking — near top for immediate visibility */}
-      {status.watchlist?.length > 0 && (
-        <section style={{ ...cardStyle, marginBottom: 16, padding: '14px 16px' }}>
-          <h2 style={{ ...sectionTitleStyle, fontSize: 15 }}>
-            Tracking ({status.watchlist_count ?? status.watchlist.length} symbols)
-          </h2>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {status.watchlist.map((ticker) => (
-              <span key={ticker} style={tickerChipStyle}>{ticker}</span>
-            ))}
-          </div>
-        </section>
-      )}
+      <section style={{ ...cardStyle, marginBottom: 0, padding: '14px 16px' }}>
+        <h2 style={{ ...sectionTitleStyle, fontSize: 15 }}>
+          Tracking ({LIVE_UNDERLYINGS.length} symbols)
+        </h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {LIVE_UNDERLYINGS.map((ticker) => (
+            <span key={ticker} style={tickerChipStyle}>{ticker}</span>
+          ))}
+        </div>
+      </section>
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <DailyPnlCalendar dailyByKey={status.daily_pnl_by_key} />
+      </div>
+      </div>
 
       {/* Section 2 — Performance Summary */}
       <section style={cardStyle}>
@@ -766,6 +1045,8 @@ export default function Dashboard() {
           </>
         )}
       </section>
+
+      <BreakoutLog status={status} />
     </div>
   );
 }
@@ -789,6 +1070,60 @@ const cardStyle = {
 const sectionTitleStyle = {
   margin: '0 0 12px',
   fontSize: 18,
+};
+
+const topGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+  gap: 16,
+  alignItems: 'stretch',
+  marginBottom: 16,
+};
+
+const calNavStyle = {
+  border: '1px solid #d1d5db',
+  background: '#fff',
+  borderRadius: 6,
+  width: 28,
+  height: 28,
+  cursor: 'pointer',
+  fontSize: 16,
+  lineHeight: 1,
+  color: DATE_TEXT,
+};
+
+const calWeekdayRow = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+  gap: 4,
+  marginBottom: 4,
+};
+
+const calWeekdayStyle = {
+  textAlign: 'center',
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#6b7280',
+};
+
+const calGrid = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+  gap: 4,
+};
+
+const calCellStyle = {
+  minHeight: 52,
+  borderRadius: 6,
+  padding: '4px 5px',
+  boxSizing: 'border-box',
+};
+
+const subheadStyle = {
+  margin: '0 0 8px',
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#111827',
 };
 
 const statusBarStyle = {
