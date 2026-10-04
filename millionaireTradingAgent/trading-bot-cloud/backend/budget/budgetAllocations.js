@@ -12,10 +12,12 @@ import {
   getLiveBudgetCacheMeta,
   getLiveStrategyKeys,
   resolveLiveSizingBudget,
+  computeLiveBudgetMax,
   LIVE_PER_TRADE_CAP_FRAC,
   livePerTradeCapFracFor,
 } from './liveBudget.js';
 import { refreshLiveRiskState } from './liveRiskSync.js';
+import { getLiveAccountBalances, hasLiveCredentialsConfigured } from '../brokerageConnector.js';
 
 export { LIVE_PER_TRADE_CAP_FRAC, livePerTradeCapFracFor };
 
@@ -361,15 +363,82 @@ export async function getAllBudgetAllocations() {
   };
 }
 
+const DASHBOARD_BUDGET_STRATEGIES = {
+  swing_budget: 'swing',
+  orb_budget: 'orb',
+  premarket_budget: 'premarket',
+  emavwap_budget: 'emavwap',
+};
+
+/**
+ * Dashboard-only overlay. Recomputes live Max and remaining from a Tastytrade
+ * cash figure using the existing 75% shared-pool formula. Does not write the
+ * sizing cache or the daily-loss baseline.
+ */
+export function applyFreshCashToDashboardBudgets(budgets, cashBalance) {
+  const cash = Number(cashBalance);
+  if (!Number.isFinite(cash) || cash < 0) return budgets;
+
+  const liveStrategies = [];
+  let deployedByStrategy = null;
+  for (const [card, strategy] of Object.entries(DASHBOARD_BUDGET_STRATEGIES)) {
+    const snap = budgets?.[card];
+    if (snap?.budget_mode !== 'live') continue;
+    liveStrategies.push(strategy);
+    if (!deployedByStrategy && snap.live_deployed_by_strategy) {
+      deployedByStrategy = snap.live_deployed_by_strategy;
+    }
+  }
+  if (!liveStrategies.length) return budgets;
+
+  const deployed = deployedByStrategy || {};
+  const next = { ...budgets };
+  for (const [card, strategy] of Object.entries(DASHBOARD_BUDGET_STRATEGIES)) {
+    const snap = budgets[card];
+    if (!snap || snap.budget_mode !== 'live') continue;
+    const max = computeLiveBudgetMax(cash);
+    const remaining = resolveLiveSizingBudget({
+      cashBalance: cash,
+      deployedByStrategy: deployed,
+      liveStrategies,
+      requestingStrategy: strategy,
+      perTradeCapFrac: livePerTradeCapFracFor(strategy),
+    });
+    next[card] = {
+      ...snap,
+      total_allocated: max,
+      max,
+      remaining,
+      live_account_cash: cash,
+    };
+  }
+  return next;
+}
+
 /** For handlers.js dashboard budget cards. */
 export async function getDashboardBudgets() {
   const all = await getAllBudgetAllocations();
-  return {
+  const budgets = {
     swing_budget: all.strategies.swing,
     orb_budget: all.strategies.orb,
     premarket_budget: all.strategies.premarket,
     emavwap_budget: all.strategies.emavwap,
   };
+
+  const anyLive = Object.values(budgets).some((snap) => snap?.budget_mode === 'live');
+  if (!anyLive || !hasLiveCredentialsConfigured()) return budgets;
+
+  try {
+    const balances = await getLiveAccountBalances();
+    const cash = Number(balances.tradableBalance ?? balances.cashBalance);
+    return applyFreshCashToDashboardBudgets(budgets, cash);
+  } catch (err) {
+    console.warn(
+      '[Budget] Dashboard Tastytrade balance read failed; showing last cached budget:',
+      err.message
+    );
+    return budgets;
+  }
 }
 
 export async function runWeeklyBudgetTopOff() {
