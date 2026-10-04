@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { getApiBase, getApiConfigError } from './api.js';
+import { theme } from './theme.js';
 
 const API_BASE = getApiBase();
 const API_CONFIG_ERROR = getApiConfigError();
@@ -59,7 +60,7 @@ function resolveTickerWinStats(tickerWinRates, row) {
 
 function TickerWinRateCell({ stats }) {
   if (!stats || !stats.closed_trades) {
-    return <span style={{ color: '#9ca3af' }}>—</span>;
+    return <span style={{ color: theme.textMuted }}>—</span>;
   }
   const stratParts = Object.entries(stats.by_strategy || {})
     .filter(([, s]) => (s.closed_trades || 0) > 0)
@@ -74,7 +75,7 @@ function TickerWinRateCell({ stats }) {
         {formatWinRate(stats)}
       </div>
       {stratParts.length > 1 && (
-        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+        <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
           {stratParts.join(' · ')}
         </div>
       )}
@@ -83,7 +84,7 @@ function TickerWinRateCell({ stats }) {
 }
 
 const ET_TZ = 'America/New_York';
-const DATE_TEXT = '#111111';
+const DATE_TEXT = theme.text;
 const LIVE_UNDERLYINGS = ['IWM', 'SPY', 'QQQ'];
 const POSITION_EVENT_TYPES = new Set([
   'mfe_advance',
@@ -193,6 +194,27 @@ function formatCompactDollars(value) {
   return `${sign}$${body}`;
 }
 
+function scanStatusColor(label) {
+  if (label === 'Scanned — no breakout' || label === 'No scan state recorded') return theme.textMuted;
+  if (label === 'Breakout detected — awaiting confirmation — no trade') return theme.light;
+  return theme.text;
+}
+
+function eventStatusColor(row) {
+  if (row?.outcome === 'filled') return theme.light;
+  if (row?.outcome === 'invalidated' || row?.outcome === 'abandoned') return theme.textMuted;
+  return theme.text;
+}
+
+function resultColor(trades) {
+  const vals = (trades || []).map((trade) => Number(trade.pnl_pct)).filter((v) => Number.isFinite(v));
+  if (!vals.length) return theme.textMuted;
+  if (vals.every((v) => v > 0)) return theme.positive;
+  if (vals.every((v) => v < 0)) return theme.negative;
+  if (vals.every((v) => v === 0)) return theme.textMuted;
+  return theme.text;
+}
+
 function currentScanLabel(range) {
   if (!range || (range.phase == null && range.high == null && range.low == null)) {
     return 'No scan state recorded';
@@ -209,8 +231,8 @@ function currentScanLabel(range) {
 
 function pnlColor(value) {
   const v = Number(value);
-  if (!Number.isFinite(v) || v === 0) return '#6b7280';
-  return v > 0 ? '#16a34a' : '#dc2626';
+  if (!Number.isFinite(v) || v === 0) return theme.textMuted;
+  return v > 0 ? theme.positive : theme.negative;
 }
 
 function trendArrows(trend) {
@@ -226,8 +248,8 @@ function trendLabel(trend) {
 }
 
 function rowBorderColor(trend) {
-  if (trend === 'UPTREND') return '#16a34a';
-  if (trend === 'DOWNTREND') return '#dc2626';
+  if (trend === 'UPTREND') return theme.positive;
+  if (trend === 'DOWNTREND') return theme.negative;
   return 'transparent';
 }
 
@@ -251,9 +273,9 @@ function EnvironmentBadge({ environment }) {
         fontSize: 10,
         fontWeight: 800,
         letterSpacing: '0.06em',
-        background: isLive ? '#fee2e2' : '#dbeafe',
-        color: isLive ? '#991b1b' : '#1d4ed8',
-        border: isLive ? '1px solid #f87171' : '1px solid #93c5fd',
+        background: isLive ? theme.negative : theme.panelAlt,
+        color: theme.text,
+        border: isLive ? `1px solid ${theme.negative}` : `1px solid ${theme.accent}`,
       }}
     >
       {isLive ? 'LIVE' : 'PAPER'}
@@ -263,10 +285,10 @@ function EnvironmentBadge({ environment }) {
 
 function StrategyBadge({ strategy }) {
   const styles = {
-    orb: { bg: '#ede9fe', color: '#6d28d9', label: '0DTE ORB' },
-    premarket: { bg: '#ffedd5', color: '#c2410c', label: 'PREMARKET' },
-    emavwap: { bg: '#d1fae5', color: '#047857', label: 'EMA/VWAP' },
-    swing: { bg: '#dbeafe', color: '#1d4ed8', label: 'SWING' },
+    orb: { bg: theme.primary, color: theme.text, border: theme.primary, label: '0DTE ORB' },
+    premarket: { bg: theme.panelAlt, color: theme.light, border: theme.accent, label: 'PREMARKET' },
+    emavwap: { bg: theme.panelAlt, color: theme.text, border: theme.light, label: 'EMA/VWAP' },
+    swing: { bg: theme.panel, color: theme.textMuted, border: theme.primary, label: 'SWING' },
   };
   const s = styles[strategy] || styles.swing;
   return (
@@ -280,6 +302,7 @@ function StrategyBadge({ strategy }) {
         letterSpacing: '0.04em',
         background: s.bg,
         color: s.color,
+        border: `1px solid ${s.border}`,
       }}
     >
       {s.label}
@@ -299,7 +322,7 @@ function ModeToggle({ label, mode, disabled, controlsDisabled, onToggle }) {
   const isInactive = controlsDisabled || disabled;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: '#6b7280' }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: theme.textMuted }}>
         {label} · {isAuto ? 'AUTO' : 'MANUAL'}
       </span>
       <button
@@ -307,14 +330,15 @@ function ModeToggle({ label, mode, disabled, controlsDisabled, onToggle }) {
         onClick={controlsDisabled ? undefined : onToggle}
         disabled={isInactive}
         title={controlsDisabled ? 'Dashboard controls are temporarily disabled pending authentication' : undefined}
+        className="desk-btn"
         style={{
           padding: '8px 16px',
           fontSize: 12,
           fontWeight: 700,
           minWidth: 200,
-          background: controlsDisabled ? '#9ca3af' : isAuto ? '#16a34a' : '#ca8a04',
-          color: 'white',
-          border: 'none',
+          background: controlsDisabled ? theme.panelAlt : isAuto ? theme.positive : theme.primary,
+          color: controlsDisabled ? theme.textMuted : theme.text,
+          border: controlsDisabled ? `1px solid ${theme.border}` : 'none',
           borderRadius: 8,
           cursor: isInactive ? 'not-allowed' : 'pointer',
           opacity: isInactive ? 0.65 : 1,
@@ -354,9 +378,9 @@ function DailyPnlCalendar({ dailyByKey }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: DATE_TEXT }}>Daily P&L</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{title}</span>
-          <button type="button" aria-label="Previous month" onClick={() => setCursor((c) => shiftMonth(c.year, c.month, -1))} style={calNavStyle}>‹</button>
-          <button type="button" aria-label="Next month" onClick={() => setCursor((c) => shiftMonth(c.year, c.month, 1))} style={calNavStyle}>›</button>
+          <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{title}</span>
+          <button type="button" className="desk-btn" aria-label="Previous month" onClick={() => setCursor((c) => shiftMonth(c.year, c.month, -1))} style={calNavStyle}>‹</button>
+          <button type="button" className="desk-btn" aria-label="Next month" onClick={() => setCursor((c) => shiftMonth(c.year, c.month, 1))} style={calNavStyle}>›</button>
         </div>
       </div>
       <div style={calWeekdayRow}>
@@ -369,23 +393,23 @@ function DailyPnlCalendar({ dailyByKey }) {
           if (cell.empty) return <div key={cell.key} style={{ ...calCellStyle, background: 'transparent', borderColor: 'transparent' }} />;
           const dollars = cell.stats?.dollars;
           const shade = cell.stats ? calendarShade(dollars) : 'flat';
-          const background = shade === 'up' ? '#bbf7d0' : shade === 'down' ? '#fecaca' : '#fff';
-          const amountColor = shade === 'up' ? '#166534' : shade === 'down' ? '#991b1b' : '#6b7280';
+          const background = shade === 'up' ? theme.positive : shade === 'down' ? theme.negative : theme.panelAlt;
+          const amountColor = shade === 'flat' ? theme.textMuted : theme.text;
           return (
             <div
               key={cell.key}
               style={{
                 ...calCellStyle,
                 background,
-                border: cell.today ? '1px solid #2563eb' : '1px solid #e5e7eb',
-                boxShadow: cell.today ? 'inset 0 0 0 1px #93c5fd' : 'none',
+                border: cell.today ? `1px solid ${theme.light}` : `1px solid ${theme.border}`,
+                boxShadow: cell.today ? `inset 0 0 0 1px ${theme.light}` : 'none',
               }}
             >
-              <div style={{ textAlign: 'left', fontSize: 12, fontWeight: 700, color: DATE_TEXT, lineHeight: 1.1 }}>
+              <div style={{ textAlign: 'left', fontSize: 12, fontWeight: 700, color: DATE_TEXT, lineHeight: 1.1, textShadow: shade === 'flat' ? 'none' : '0 1px 1px rgba(7, 26, 51, 0.45)' }}>
                 {cell.day}
               </div>
               {cell.stats && (
-                <div style={{ fontSize: 10, fontWeight: 700, color: amountColor, marginTop: 4, lineHeight: 1.2 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: amountColor, marginTop: 4, lineHeight: 1.2, textShadow: shade === 'flat' ? 'none' : '0 1px 1px rgba(7, 26, 51, 0.45)' }}>
                   {formatCompactDollars(dollars)}
                 </div>
               )}
@@ -416,14 +440,14 @@ function BreakoutLog({ status }) {
   return (
     <section style={{ ...cardStyle, marginTop: 16 }}>
       <h2 style={sectionTitleStyle}>Breakout Log</h2>
-      <p style={{ color: '#6b7280', fontSize: 13, margin: '0 0 12px', maxWidth: 820 }}>
+      <p style={{ color: theme.textMuted, fontSize: 13, margin: '0 0 12px', maxWidth: 820 }}>
         Current opening-range state for the live universe, plus recorded breakout and entry events from the last week.
         A quiet scan that never leaves the range is not stored, so past “no breakout” rows are not listed.
         Position-management events are left out of this table.
       </p>
       <h3 style={subheadStyle}>Current scan{sessionDate ? ` · ${sessionDate}` : ''}</h3>
       <div style={{ overflowX: 'auto', marginBottom: 16 }}>
-        <table style={tableStyle}>
+        <table className="desk-table" style={tableStyle}>
           <thead>
             <tr>
               <th style={thStyle}>Ticker</th>
@@ -453,9 +477,9 @@ function BreakoutLog({ status }) {
                   <td style={tdStyle}>
                     {range?.breakout_level != null ? formatCurrency(range.breakout_level) : '—'}
                   </td>
-                  <td style={tdStyle}>{currentScanLabel(range)}</td>
-                  <td style={tdStyle}>{todaysTrades.length ? 'Yes' : 'No'}</td>
-                  <td style={tdStyle}>{result || '—'}</td>
+                  <td style={{ ...tdStyle, color: scanStatusColor(currentScanLabel(range)) }}>{currentScanLabel(range)}</td>
+                  <td style={{ ...tdStyle, color: todaysTrades.length ? theme.text : theme.textMuted, fontWeight: todaysTrades.length ? 700 : 400 }}>{todaysTrades.length ? 'Yes' : 'No'}</td>
+                  <td style={{ ...tdStyle, color: resultColor(todaysTrades) }}>{result || '—'}</td>
                 </tr>
               );
             })}
@@ -464,10 +488,10 @@ function BreakoutLog({ status }) {
       </div>
       <h3 style={subheadStyle}>Recorded events</h3>
       {!events.length && !trades.length ? (
-        <p style={{ color: '#666', margin: 0 }}>No breakout or entry events in the current log.</p>
+        <p style={{ color: theme.textMuted, margin: 0 }}>No breakout or entry events in the current log.</p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table style={tableStyle}>
+          <table className="desk-table" style={tableStyle}>
             <thead>
               <tr>
                 <th style={thStyle}>Time</th>
@@ -495,9 +519,9 @@ function BreakoutLog({ status }) {
                     <td style={tdStyle}>
                       {row.breakout_level != null ? formatCurrency(row.breakout_level) : '—'}
                     </td>
-                    <td style={tdStyle}>{row.outcome_label || row.event_type || '—'}</td>
-                    <td style={tdStyle}>{row.outcome === 'filled' ? 'Yes' : 'No'}</td>
-                    <td style={tdStyle}>{resultBits.join(' ') || '—'}</td>
+                    <td style={{ ...tdStyle, color: eventStatusColor(row) }}>{row.outcome_label || row.event_type || '—'}</td>
+                    <td style={{ ...tdStyle, color: row.outcome === 'filled' ? theme.text : theme.textMuted, fontWeight: row.outcome === 'filled' ? 700 : 400 }}>{row.outcome === 'filled' ? 'Yes' : 'No'}</td>
+                    <td style={{ ...tdStyle, color: row.pnl_pct != null ? pnlColor(row.pnl_pct) : theme.text }}>{resultBits.join(' ') || '—'}</td>
                   </tr>
                 );
               })}
@@ -508,9 +532,9 @@ function BreakoutLog({ status }) {
                   <td style={tdStyle}><StrategyBadge strategy={trade.strategy} /></td>
                   <td style={tdStyle}>{trade.direction || '—'}</td>
                   <td style={tdStyle}>—</td>
-                  <td style={tdStyle}>Trade</td>
-                  <td style={tdStyle}>Yes</td>
-                  <td style={tdStyle}>
+                  <td style={{ ...tdStyle, color: theme.light, fontWeight: 700 }}>Trade</td>
+                  <td style={{ ...tdStyle, color: theme.text, fontWeight: 700 }}>Yes</td>
+                  <td style={{ ...tdStyle, color: pnlColor(trade.pnl_pct) }}>
                     {[trade.close_reason, formatPct(trade.pnl_pct)].filter((part) => part && part !== '—').join(' ') || '—'}
                   </td>
                 </tr>
@@ -530,7 +554,7 @@ function PnlBox({ label, value }) {
   const display = v === 0 ? formatCurrency(0) : `${prefix}${formatCurrency(Math.abs(v))}`;
   return (
     <div style={pnlBoxStyle}>
-      <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 4 }}>{label}</div>
+      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color }}>{display}</div>
     </div>
   );
@@ -628,9 +652,9 @@ export default function Dashboard() {
   if (loading) return <p>Loading...</p>;
   if (fetchError && !status) {
     return (
-      <div style={{ color: 'crimson' }}>
+      <div style={{ color: theme.negative }}>
         <p>Error loading dashboard: {fetchError}</p>
-        <button type="button" onClick={fetchStatus} style={retryButtonStyle}>Retry</button>
+        <button type="button" className="desk-btn" onClick={fetchStatus} style={retryButtonStyle}>Retry</button>
       </div>
     );
   }
@@ -663,7 +687,7 @@ export default function Dashboard() {
 
   return (
     <div>
-      <p style={{ color: '#666', margin: '0 0 16px' }}>Tastytrade · Cloud · Tradier</p>
+      <p style={{ color: theme.textMuted, margin: '0 0 16px' }}>Tastytrade · Cloud · Tradier</p>
 
       <div style={topGridStyle}>
       <div style={{ minWidth: 0 }}>
@@ -671,17 +695,17 @@ export default function Dashboard() {
       <div style={statusBarStyle}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#374151' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: theme.text }}>
               Swing <EnvironmentBadge environment={swingEnv} />
             </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#374151' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: theme.text }}>
               0DTE ORB <EnvironmentBadge environment={orbEnv} />
             </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#374151' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: theme.text }}>
               Premarket <EnvironmentBadge environment={premarketEnv} />
             </span>
           </div>
-          <span style={{ color: '#666', fontSize: 13 }}>
+          <span style={{ color: theme.textMuted, fontSize: 13 }}>
             Last updated: {formatTime(lastRefreshed)} · auto-refresh 15s
           </span>
         </div>
@@ -711,18 +735,18 @@ export default function Dashboard() {
       </div>
 
       {controlsDisabled && (
-        <div style={{ background: '#f3f4f6', color: '#4b5563', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+        <div style={{ background: theme.panelAlt, color: theme.textMuted, border: `1px solid ${theme.border}`, padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
           Dashboard is read-only. Mode controls are disabled until authentication is added. Use Telegram /STOP and /GO to change execution mode.
         </div>
       )}
 
       {fetchError && (
-        <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16 }}>
+        <div style={{ background: theme.panelAlt, color: theme.text, border: `1px solid ${theme.negative}`, padding: 12, borderRadius: 8, marginBottom: 16 }}>
           Refresh error: {fetchError}
         </div>
       )}
       {toggleError && (
-        <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16 }}>
+        <div style={{ background: theme.panelAlt, color: theme.text, border: `1px solid ${theme.negative}`, padding: 12, borderRadius: 8, marginBottom: 16 }}>
           Toggle failed: {toggleError}
         </div>
       )}
@@ -764,7 +788,7 @@ export default function Dashboard() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>Budget</h2>
         {!liveBudgetCards.length ? (
-          <p style={{ color: '#666', margin: 0 }}>No live strategy budgets</p>
+          <p style={{ color: theme.textMuted, margin: 0 }}>No live strategy budgets</p>
         ) : (
           <div style={threeColGrid}>
             {liveBudgetCards.map(({ title, budget, env }) => (
@@ -775,7 +799,7 @@ export default function Dashboard() {
                 </div>
                 <div style={budgetRow}>
                   <span>Remaining</span>
-                  <span style={{ color: '#16a34a', fontWeight: 700 }}>{formatCurrency(budget.remaining)}</span>
+                  <span style={{ color: pnlColor(budget.remaining), fontWeight: 700 }}>{formatCurrency(budget.remaining)}</span>
                 </div>
                 <div style={budgetRow}>
                   <span>Spent</span>
@@ -796,7 +820,7 @@ export default function Dashboard() {
                   <span style={{
                     fontWeight: 600,
                     color: budget.win_rate_percent == null
-                      ? '#6b7280'
+                      ? theme.textMuted
                       : pnlColor(budget.win_rate_percent - 50),
                   }}
                   >
@@ -813,10 +837,10 @@ export default function Dashboard() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>Open Positions</h2>
         {!status.open_positions?.length ? (
-          <p style={{ color: '#666', margin: 0 }}>No open positions</p>
+          <p style={{ color: theme.textMuted, margin: 0 }}>No open positions</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
+            <table className="desk-table" style={tableStyle}>
               <thead>
                 <tr>
                   <th style={thStyle}>Strategy</th>
@@ -837,7 +861,7 @@ export default function Dashboard() {
                     <td style={tdStyle}>{p.ticker}</td>
                     <td style={{
                       ...tdStyle,
-                      color: p.direction === 'CALL' ? '#16a34a' : '#dc2626',
+                      color: p.direction === 'CALL' ? theme.positive : theme.negative,
                       fontWeight: 600,
                     }}>
                       {p.direction}
@@ -864,10 +888,10 @@ export default function Dashboard() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>Trade Log</h2>
         {!liveTradeLog.length ? (
-          <p style={{ color: '#666', margin: 0 }}>No closed live trades yet</p>
+          <p style={{ color: theme.textMuted, margin: 0 }}>No closed live trades yet</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
+            <table className="desk-table" style={tableStyle}>
               <thead>
                 <tr>
                   <th style={thStyle}>Date</th>
@@ -888,7 +912,7 @@ export default function Dashboard() {
                     <td style={tdStyle}>{t.ticker}</td>
                     <td style={{
                       ...tdStyle,
-                      color: t.direction === 'CALL' ? '#16a34a' : '#dc2626',
+                      color: t.direction === 'CALL' ? theme.positive : theme.negative,
                     }}>
                       {t.direction}
                     </td>
@@ -913,7 +937,7 @@ export default function Dashboard() {
       {status.last_signal_checked && (
         <section style={{ ...cardStyle, marginTop: 16 }}>
           <h2 style={sectionTitleStyle}>Last Signal Checked</h2>
-          <table style={tableStyle}>
+          <table className="desk-table" style={tableStyle}>
             <tbody>
               <tr><td style={tdLabel}>Ticker</td><td>{status.last_signal_checked.ticker}</td></tr>
               <tr><td style={tdLabel}>Type</td><td>{status.last_signal_checked.signal_type}</td></tr>
@@ -930,10 +954,10 @@ export default function Dashboard() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>Watchlist Scan</h2>
         {!status.last_scan_results?.length ? (
-          <p style={{ color: '#666' }}>Waiting for next scan cycle</p>
+          <p style={{ color: theme.textMuted }}>Waiting for next scan cycle</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
+            <table className="desk-table" style={tableStyle}>
               <thead>
                 <tr>
                   <th style={thStyle}>Ticker</th>
@@ -963,7 +987,7 @@ export default function Dashboard() {
                     <td style={tdStyle}>{trendArrows(row.weekly_trend)}</td>
                     <td style={{
                       ...tdStyle,
-                      color: row.rsi_overbought ? '#ea580c' : row.rsi_oversold ? '#2563eb' : undefined,
+                      color: row.rsi_overbought ? theme.negative : row.rsi_oversold ? theme.light : undefined,
                     }}>
                       {row.rsi14 != null ? Math.round(row.rsi14) : '—'}
                     </td>
@@ -971,13 +995,13 @@ export default function Dashboard() {
                     <td style={{
                       ...tdStyle,
                       fontWeight: row.wow_momentum === 'expanding' ? 700 : undefined,
-                      color: row.wow_momentum === 'contracting' ? '#888' : undefined,
+                      color: row.wow_momentum === 'contracting' ? theme.textMuted : undefined,
                     }}>
                       {row.wow_momentum || '—'}
                     </td>
                     <td style={{
                       ...tdStyle,
-                      color: row.signal === 'CALL' ? '#16a34a' : row.signal === 'PUT' ? '#dc2626' : undefined,
+                      color: row.signal === 'CALL' ? theme.positive : row.signal === 'PUT' ? theme.negative : undefined,
                       fontWeight: row.signal === 'CALL' || row.signal === 'PUT' ? 700 : undefined,
                     }}>
                       {row.signal || '—'}
@@ -997,7 +1021,7 @@ export default function Dashboard() {
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={sectionTitleStyle}>0DTE ORB</h2>
         {!orbStatus.active ? (
-          <p style={{ color: '#666', margin: 0 }}>ORB inactive — market closed</p>
+          <p style={{ color: theme.textMuted, margin: 0 }}>ORB inactive — market closed</p>
         ) : (
           <>
             <div style={threeColGrid}>
@@ -1037,7 +1061,7 @@ export default function Dashboard() {
                 marginTop: 16,
                 marginBottom: 0,
                 fontWeight: 600,
-                color: orbStatus.minutes_to_hard_stop < 30 ? '#dc2626' : '#374151',
+                color: orbStatus.minutes_to_hard_stop < 30 ? theme.negative : theme.text,
               }}>
                 Hard Stop Countdown: {orbStatus.minutes_to_hard_stop} min remaining before 3:00pm ET force close
               </p>
@@ -1053,23 +1077,26 @@ export default function Dashboard() {
 
 const retryButtonStyle = {
   padding: '8px 16px',
-  background: '#2563eb',
-  color: 'white',
+  background: theme.primary,
+  color: theme.text,
   border: 'none',
   borderRadius: 6,
   cursor: 'pointer',
 };
 
 const cardStyle = {
-  background: '#f9fafb',
-  border: '1px solid #e5e7eb',
+  background: theme.panel,
+  border: `1px solid ${theme.border}`,
   borderRadius: 12,
   padding: 20,
+  color: theme.text,
 };
 
 const sectionTitleStyle = {
   margin: '0 0 12px',
   fontSize: 18,
+  color: theme.text,
+  fontWeight: 650,
 };
 
 const topGridStyle = {
@@ -1081,15 +1108,15 @@ const topGridStyle = {
 };
 
 const calNavStyle = {
-  border: '1px solid #d1d5db',
-  background: '#fff',
+  border: `1px solid ${theme.border}`,
+  background: theme.panelAlt,
   borderRadius: 6,
   width: 28,
   height: 28,
   cursor: 'pointer',
   fontSize: 16,
   lineHeight: 1,
-  color: DATE_TEXT,
+  color: theme.text,
 };
 
 const calWeekdayRow = {
@@ -1103,7 +1130,7 @@ const calWeekdayStyle = {
   textAlign: 'center',
   fontSize: 11,
   fontWeight: 700,
-  color: '#6b7280',
+  color: theme.light,
 };
 
 const calGrid = {
@@ -1123,7 +1150,7 @@ const subheadStyle = {
   margin: '0 0 8px',
   fontSize: 14,
   fontWeight: 700,
-  color: '#111827',
+  color: theme.light,
 };
 
 const statusBarStyle = {
@@ -1134,8 +1161,8 @@ const statusBarStyle = {
   gap: 16,
   marginBottom: 16,
   padding: '14px 16px',
-  background: '#f9fafb',
-  border: '1px solid #e5e7eb',
+  background: theme.panel,
+  border: `1px solid ${theme.border}`,
   borderRadius: 12,
 };
 
@@ -1152,8 +1179,8 @@ const threeColGrid = {
 };
 
 const pnlBoxStyle = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: theme.panelAlt,
+  border: `1px solid ${theme.border}`,
   borderRadius: 8,
   padding: '12px 14px',
 };
@@ -1161,16 +1188,17 @@ const pnlBoxStyle = {
 const investedBarStyle = {
   marginTop: 14,
   padding: '12px 14px',
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: theme.panelAlt,
+  border: `1px solid ${theme.border}`,
+  borderLeft: `3px solid ${theme.accent}`,
   borderRadius: 8,
   fontSize: 14,
-  color: '#374151',
+  color: theme.text,
 };
 
 const budgetCardInner = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: theme.panelAlt,
+  border: `1px solid ${theme.border}`,
   borderRadius: 8,
   padding: 16,
 };
@@ -1179,6 +1207,7 @@ const budgetCardTitle = {
   margin: '0 0 12px',
   fontSize: 15,
   fontWeight: 600,
+  color: theme.text,
 };
 
 const budgetRow = {
@@ -1186,7 +1215,7 @@ const budgetRow = {
   justifyContent: 'space-between',
   padding: '6px 0',
   fontSize: 14,
-  borderBottom: '1px solid #f3f4f6',
+  borderBottom: `1px solid ${theme.divider}`,
 };
 
 const dividerStyle = {
@@ -1194,21 +1223,22 @@ const dividerStyle = {
   textAlign: 'center',
   fontSize: 14,
   fontWeight: 600,
-  color: '#6b7280',
+  color: theme.light,
   letterSpacing: '0.06em',
   textTransform: 'uppercase',
 };
 
 const orbCardStyle = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: theme.panelAlt,
+  border: `1px solid ${theme.border}`,
   borderRadius: 8,
   padding: 14,
+  color: theme.text,
 };
 
 const orbRow = {
   fontSize: 13,
-  color: '#374151',
+  color: theme.textMuted,
   marginBottom: 4,
 };
 
@@ -1216,23 +1246,26 @@ const tableStyle = {
   width: '100%',
   borderCollapse: 'collapse',
   fontSize: 14,
+  color: theme.text,
 };
 
 const thStyle = {
   textAlign: 'left',
   padding: '8px 12px',
-  borderBottom: '2px solid #e5e7eb',
-  color: '#374151',
+  borderBottom: `2px solid ${theme.border}`,
+  color: theme.light,
+  fontWeight: 650,
 };
 
 const tdStyle = {
   padding: '8px 12px',
-  borderBottom: '1px solid #e5e7eb',
+  borderBottom: `1px solid ${theme.divider}`,
+  color: theme.text,
 };
 
 const tdLabel = {
   ...tdStyle,
-  color: '#666',
+  color: theme.textMuted,
   width: 120,
 };
 
@@ -1240,9 +1273,10 @@ const tickerChipStyle = {
   display: 'inline-block',
   padding: '4px 10px',
   fontSize: 12,
-  fontWeight: 600,
-  color: '#1f2937',
-  background: '#fff',
-  border: '1px solid #d1d5db',
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  color: theme.text,
+  background: theme.panelAlt,
+  border: `1px solid ${theme.accent}`,
   borderRadius: 6,
 };

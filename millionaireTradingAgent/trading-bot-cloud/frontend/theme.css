@@ -1,0 +1,39 @@
+html,
+body,
+#root {
+  background: var(--desk-bg, #071A33);
+  color: var(--desk-text, #FFFFFF);
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+p {
+  color: inherit;
+}
+
+.desk-btn {
+  transition: filter 120ms ease, border-color 120ms ease;
+}
+
+.desk-btn:hover:not(:disabled) {
+  filter: brightness(1.14);
+}
+
+.desk-btn:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.desk-btn:focus-visible {
+  outline: 2px solid var(--desk-light, #6FA8DC);
+  outline-offset: 2px;
+}
+
+.desk-table tbody tr:hover td {
+  background: rgba(40, 120, 200, 0.14);
+}
